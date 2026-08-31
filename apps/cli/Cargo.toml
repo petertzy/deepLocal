@@ -1,0 +1,17 @@
+[package]
+name = "deeplocal"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+deeplocal-api = { path = "../../crates/api" }
+deeplocal-core = { path = "../../crates/core" }
+deeplocal-hardware = { path = "../../crates/hardware" }
+deeplocal-runtime = { path = "../../crates/runtime" }
+serde_json.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true

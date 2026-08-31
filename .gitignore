@@ -1,0 +1,8 @@
+/target/
+/apps/desktop/node_modules/
+/apps/desktop/dist/
+/models/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

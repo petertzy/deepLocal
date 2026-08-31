@@ -1,0 +1,15 @@
+[server]
+host = "127.0.0.1"
+port = 14567
+enable_cors = true
+
+[models]
+directory = "./models"
+auto_load_last_model = false
+
+[runtime]
+default_backend = "llama.cpp"
+idle_unload_minutes = 30
+
+[downloads]
+max_parallel = 2
