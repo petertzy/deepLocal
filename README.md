@@ -3,6 +3,8 @@
 deepLocal is an open-source local AI runtime and desktop studio for running,
 managing, serving, and benchmarking open models on your own hardware.
 
+<img width="1440" height="621" alt="Image" src="https://github.com/user-attachments/assets/dca8f98c-2f08-451a-bf77-9df5db2191d1" />
+
 ## Start The App
 
 Run this from the project root:
