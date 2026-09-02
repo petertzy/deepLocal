@@ -315,11 +315,26 @@ article p {
 }
 
 .actions button,
+.modelPath button,
 .modelTools button,
 .composer button {
   padding: 0 12px;
   color: #ffffff;
   background: #172026;
+}
+
+.modelPath {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modelPath span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #66727a;
 }
 
 .modelTools {
@@ -733,6 +748,7 @@ label {
   .fileRow,
   .apiEndpoint,
   .modelTools,
+  .modelPath,
   .composer,
   .emptyState {
     grid-template-columns: 1fr;

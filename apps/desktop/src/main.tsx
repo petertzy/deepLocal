@@ -472,6 +472,19 @@ function Models({
     onNotice(res.ok ? `Opened ${modelsDirectory}.` : `Failed to open ${modelsDirectory}.`);
   }
 
+  async function copyModelPath(model: ModelDescriptor) {
+    if (!model.local_path) {
+      onNotice(`No local path registered for ${model.name}.`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(model.local_path);
+      onNotice(`Copied path for ${model.name}.`);
+    } catch {
+      onNotice(`Copy failed. Path: ${model.local_path}`);
+    }
+  }
+
   return (
     <div className="pane">
       <div className="paneHeader">
@@ -566,7 +579,13 @@ function Models({
               <p>
                 {model.source} / {model.format}
               </p>
-              <p>{model.local_path ?? "No local path registered"}</p>
+              <div className="modelPath">
+                <span>{model.local_path ?? "No local path registered"}</span>
+                <button disabled={!model.local_path} onClick={() => copyModelPath(model)}>
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
               <div className="actions">
                 {handle ? (
                   <button onClick={() => unload(model.id)}>
