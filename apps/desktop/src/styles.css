@@ -115,6 +115,38 @@ header {
   margin-bottom: 20px;
 }
 
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.healthBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 124px;
+  min-height: 38px;
+  border: 1px solid #dde2e4;
+  border-radius: 8px;
+  color: #445057;
+  background: #ffffff;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.healthBadge.online {
+  color: #245f53;
+  background: #eef8f4;
+}
+
+.healthBadge.offline {
+  color: #8b382a;
+  background: #fff3ef;
+}
+
 h1,
 h2,
 p {
@@ -743,6 +775,15 @@ label {
   .actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .headerControls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .healthBadge {
+    width: 100%;
   }
 
   .headerActions {
