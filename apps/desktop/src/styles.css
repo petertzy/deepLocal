@@ -455,10 +455,16 @@ article p {
 
 .jobStatus {
   width: fit-content;
-  min-width: 82px;
+  min-width: 96px;
   border-radius: 999px;
   padding: 4px 8px;
   text-align: center;
+  color: #445057;
+  background: #eef2f1;
+}
+
+.jobStatus.queued {
+  color: #445057;
   background: #eef2f1;
 }
 

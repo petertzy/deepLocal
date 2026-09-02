@@ -542,7 +542,7 @@ function Models({
                       <strong>{formatFileSize(file.size_bytes)}</strong>
                       {job ? (
                         <div className="inlineDownload">
-                          <span className={`jobStatus ${job.status}`}>{job.status}</span>
+                          <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
                           <progress value={job.downloaded_bytes} max={job.total_bytes ?? (job.downloaded_bytes || 1)} />
                           <em>
                             {downloadPercent(job)} / {formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}
@@ -886,6 +886,19 @@ function downloadActionLabel(job: DownloadJob) {
   if (job.status === "cancelling") return "Stopping";
   if (job.status === "starting") return "Starting";
   return "Stop";
+}
+
+function downloadStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "Queued",
+    starting: "Preparing",
+    downloading: "Downloading",
+    cancelling: "Stopping",
+    cancelled: "Cancelled",
+    downloaded: "Downloaded",
+    error: "Needs attention",
+  };
+  return labels[status] ?? "In progress";
 }
 
 function normalizeMarkdown(content: string) {
