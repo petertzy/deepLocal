@@ -158,10 +158,16 @@ function App() {
             <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
             <p>{notice}</p>
           </div>
-          <button className="primary" onClick={refresh}>
-            <RefreshCw size={18} />
-            Refresh
-          </button>
+          <div className="headerControls">
+            <div className={`healthBadge ${health}`}>
+              <span className={`dot ${health}`} />
+              <span>{health === "online" ? "API online" : "API offline"}</span>
+            </div>
+            <button className="primary" onClick={refresh}>
+              <RefreshCw size={18} />
+              Refresh
+            </button>
+          </div>
         </header>
 
         {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => setTab("models")} />}
