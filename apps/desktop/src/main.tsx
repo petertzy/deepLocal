@@ -3,13 +3,16 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import {
   Activity,
+  ArrowRight,
   Boxes,
   Copy,
   Cpu,
   Download,
+  FolderOpen,
   MessageSquare,
   Play,
   RefreshCw,
+  Search,
   Server,
   Settings,
   Square,
@@ -161,8 +164,8 @@ function App() {
           </button>
         </header>
 
-        {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} />}
-        {tab === "chat" && <Chat loaded={loaded} onNotice={setNotice} />}
+        {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => setTab("models")} />}
+        {tab === "chat" && <Chat loaded={loaded} onOpenModels={() => setTab("models")} onNotice={setNotice} />}
         {tab === "models" && (
           <Models
             models={models}
@@ -174,7 +177,7 @@ function App() {
             onRefresh={refresh}
           />
         )}
-        {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onNotice={setNotice} />}
+        {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onOpenModels={() => setTab("models")} onNotice={setNotice} />}
         {tab === "settings" && (
           <SettingsPanel modelsDirectory={modelsDirectory} hfToken={hfToken} onTokenChange={setHfToken} onNotice={setNotice} />
         )}
@@ -188,18 +191,32 @@ function Dashboard({
   hardware,
   loaded,
   models,
+  onOpenModels,
 }: {
   health: Health;
   hardware: HardwareProfile | null;
   loaded: LoadedModel[];
   models: ModelDescriptor[];
+  onOpenModels: () => void;
 }) {
+  const isEmpty = models.length === 0 && loaded.length === 0;
+
   return (
     <div className="dashboard">
       <Metric title="Runtime" value={health} detail={API_BASE} />
       <Metric title="Registered models" value={models.length.toString()} detail="Runtime catalog" />
       <Metric title="Loaded models" value={loaded.length.toString()} detail={loaded.map((item) => item.id).join(", ") || "None"} />
       <Metric title="Memory" value={formatBytes(hardware?.total_ram_bytes ?? 0)} detail={hardware?.cpu_brand ?? "No hardware profile"} />
+      {isEmpty && (
+        <EmptyState
+          className="wide"
+          icon={<Download size={24} />}
+          title="No local models yet"
+          description="Download a GGUF model or register an existing file to turn this dashboard into a live runtime overview."
+          actionLabel="Find models"
+          onAction={onOpenModels}
+        />
+      )}
     </div>
   );
 }
@@ -226,11 +243,9 @@ function ProgressItem({ done, title, detail }: { done?: boolean; title: string; 
   );
 }
 
-function Chat({ loaded, onNotice }: { loaded: LoadedModel[]; onNotice: (message: string) => void }) {
+function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpenModels: () => void; onNotice: (message: string) => void }) {
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
-  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([
-    { role: "assistant", content: "Load a model, then send a prompt through the OpenAI-compatible API." },
-  ]);
+  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
 
   async function send() {
@@ -270,11 +285,21 @@ function Chat({ loaded, onNotice }: { loaded: LoadedModel[]; onNotice: (message:
         <span>Active model: {activeModel ?? "No model loaded"}</span>
       </div>
       <div className="transcript">
-        {messages.map((message, index) => (
-          <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-            {message.role === "assistant" ? <ReactMarkdown>{normalizeMarkdown(message.content)}</ReactMarkdown> : message.content}
-          </div>
-        ))}
+        {!messages.length && !activeModel ? (
+          <EmptyState
+            icon={<MessageSquare size={24} />}
+            title="Load a model to start chatting"
+            description="Choose a downloaded GGUF model first, then send prompts here through the local API."
+            actionLabel="Open models"
+            onAction={onOpenModels}
+          />
+        ) : (
+          messages.map((message, index) => (
+            <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
+              {message.role === "assistant" ? <ReactMarkdown>{normalizeMarkdown(message.content)}</ReactMarkdown> : message.content}
+            </div>
+          ))
+        )}
       </div>
       <div className="composer">
         <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
@@ -452,7 +477,10 @@ function Models({
       <div className="paneHeader">
         <h2>Model lifecycle</h2>
         <div className="headerActions">
-          <button onClick={openModelsDirectory}>Open Folder</button>
+          <button onClick={openModelsDirectory}>
+            <FolderOpen size={16} />
+            Open Folder
+          </button>
           <button onClick={onRefresh}>
             <RefreshCw size={16} />
             Refresh
@@ -474,6 +502,16 @@ function Models({
           </button>
         </div>
         <div className="searchResults">
+          {!results.length && (
+            <EmptyState
+              compact
+              icon={<Search size={22} />}
+              title={searching ? "Searching model repositories" : "Search for a GGUF model"}
+              description={searching ? "Results will appear here as soon as Hugging Face responds." : "Try a small instruct model first, then download the file that fits your hardware."}
+              actionLabel={searching ? undefined : "Search now"}
+              onAction={searching ? undefined : searchHuggingFace}
+            />
+          )}
           {results.map((result) => (
             <article key={result.repo}>
               <h2>{result.repo}</h2>
@@ -547,10 +585,13 @@ function Models({
           );
         })}
         {!models.length && (
-          <article>
-            <h2>No models registered</h2>
-            <p>Download a GGUF model from Hugging Face or register a local model file.</p>
-          </article>
+          <EmptyState
+            icon={<Boxes size={24} />}
+            title="No registered models"
+            description="Downloaded and manually registered GGUF files will appear here, ready to load or unload."
+            actionLabel="Search Hugging Face"
+            onAction={searchHuggingFace}
+          />
         )}
       </div>
     </div>
@@ -560,10 +601,12 @@ function Models({
 function ServerPanel({
   hardware,
   loaded,
+  onOpenModels,
   onNotice,
 }: {
   hardware: HardwareProfile | null;
   loaded: LoadedModel[];
+  onOpenModels: () => void;
   onNotice: (message: string) => void;
 }) {
   const baseUrl = `${API_BASE}/v1`;
@@ -600,6 +643,16 @@ function ServerPanel({
         <ApiEndpoint title="Chat Completions" value={chatUrl} onCopy={() => copyText("Chat Completions URL", chatUrl)} />
         <ApiEndpoint title="Model ID" value={activeModel ?? "Load a model first"} disabled={!activeModel} onCopy={() => activeModel && copyText("Model ID", activeModel)} />
       </div>
+      {!activeModel && (
+        <EmptyState
+          compact
+          icon={<Server size={24} />}
+          title="API is ready for a model"
+          description="Load a GGUF model to make chat completions available from local clients."
+          actionLabel="Load model"
+          onAction={onOpenModels}
+        />
+      )}
       <div className="metrics">
         <div>
           <strong>{hardware?.cpu_brand ?? "Unknown CPU"}</strong>
@@ -629,6 +682,40 @@ function ServerPanel({
       </div>
       <pre>{curlExample}</pre>
     </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  description,
+  actionLabel,
+  compact,
+  className,
+  onAction,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  actionLabel?: string;
+  compact?: boolean;
+  className?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <section className={`emptyState ${compact ? "compact" : ""} ${className ?? ""}`.trim()}>
+      <div className="emptyIcon">{icon}</div>
+      <div>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+      {actionLabel && onAction && (
+        <button className="primary" onClick={onAction}>
+          <ArrowRight size={16} />
+          {actionLabel}
+        </button>
+      )}
+    </section>
   );
 }
 
