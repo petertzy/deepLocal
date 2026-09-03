@@ -47,6 +47,14 @@ impl RuntimeManager {
         self.models.read().await.get(model_id).cloned()
     }
 
+    pub async fn remove_model(&self, model_id: &str) -> Option<ModelDescriptor> {
+        self.models.write().await.remove(model_id)
+    }
+
+    pub async fn is_model_loaded(&self, model_id: &str) -> bool {
+        self.loaded.read().await.contains_key(model_id)
+    }
+
     pub async fn load_model(
         &self,
         backend_id: &str,

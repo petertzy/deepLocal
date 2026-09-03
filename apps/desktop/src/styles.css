@@ -914,7 +914,7 @@ label {
 
 .drawerActions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   padding-top: 12px;
   border-top: 1px solid #edf0f1;
@@ -927,6 +927,16 @@ label {
 .drawerActions button:not(.copyButton) {
   color: #ffffff;
   background: #172026;
+}
+
+.dangerAction {
+  padding: 0 12px;
+  color: #ffffff;
+  background: #8b382a;
+}
+
+.dangerAction:hover:not(:disabled) {
+  background: #762f24;
 }
 
 .settingsGrid {

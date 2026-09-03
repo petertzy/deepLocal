@@ -18,6 +18,7 @@ import {
   Server,
   Settings,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import "./styles.css";
@@ -540,6 +541,22 @@ function Models({
     onNotice(res.ok ? `Revealed ${model.name}.` : `Failed to reveal ${model.name}.`);
   }
 
+  async function deleteModel(model: ModelDescriptor, modelPath: string | null) {
+    if (!window.confirm(`Delete ${model.name} and remove its local file?\n\n${modelPath ?? "No local path registered"}`)) return;
+    const res = await fetch(`${API_BASE}/runtime/models/delete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model_id: model.id, delete_file: true }),
+    });
+    if (res.ok) {
+      setDetailsModelId(null);
+      onNotice(`Deleted ${model.name}.`);
+      await onRefresh();
+    } else {
+      onNotice(await res.text());
+    }
+  }
+
   const detailsModel = models.find((model) => model.id === detailsModelId) ?? null;
   const detailsHandle = detailsModel ? loaded.find((item) => item.id === detailsModel.id) ?? null : null;
   const detailsPath = detailsModel ? resolveModelPath(detailsModel.local_path, modelsDirectory) : null;
@@ -700,6 +717,10 @@ function Models({
                   <Info size={15} />
                   Details
                 </button>
+                <button className="dangerAction" disabled={!!handle} title={handle ? "Unload the model before deleting it" : undefined} onClick={() => deleteModel(model, modelPath)}>
+                  <Trash2 size={15} />
+                  Delete
+                </button>
               </div>
             </article>
           );
@@ -724,6 +745,7 @@ function Models({
           onLoad={() => load(detailsModel.id)}
           onUnload={() => unload(detailsModel.id)}
           onReveal={() => revealModel(detailsModel, detailsPath)}
+          onDelete={() => deleteModel(detailsModel, detailsPath)}
         />
       )}
     </div>
@@ -859,6 +881,7 @@ function ModelDetailsDrawer({
   onLoad,
   onUnload,
   onReveal,
+  onDelete,
 }: {
   model: ModelDescriptor;
   modelPath: string | null;
@@ -868,6 +891,7 @@ function ModelDetailsDrawer({
   onLoad: () => Promise<void>;
   onUnload: () => Promise<void>;
   onReveal: () => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -925,6 +949,10 @@ function ModelDetailsDrawer({
           <button disabled={!modelPath} onClick={onReveal}>
             <FolderOpen size={15} />
             Reveal
+          </button>
+          <button className="dangerAction" disabled={!!handle} title={handle ? "Unload the model before deleting it" : undefined} onClick={onDelete}>
+            <Trash2 size={15} />
+            Delete
           </button>
         </div>
       </aside>

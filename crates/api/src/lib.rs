@@ -76,6 +76,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .route("/health", get(health))
         .route("/runtime/hardware", get(hardware))
         .route("/runtime/models", get(models).post(register_model))
+        .route("/runtime/models/delete", post(delete_model))
         .route("/runtime/models/loaded", get(loaded_models))
         .route("/runtime/models/load", post(load_model))
         .route("/runtime/models/unload", post(unload_model))
@@ -183,6 +184,54 @@ async fn unload_model(
             .into_response(),
         Err(error) => (axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteModelRequest {
+    pub model_id: String,
+    #[serde(default)]
+    pub delete_file: bool,
+}
+
+async fn delete_model(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<DeleteModelRequest>,
+) -> impl IntoResponse {
+    if state.runtime.is_model_loaded(&body.model_id).await {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Unload the model before deleting it.",
+        )
+            .into_response();
+    }
+
+    let Some(model) = state.runtime.remove_model(&body.model_id).await else {
+        return (axum::http::StatusCode::NOT_FOUND, "model not found").into_response();
+    };
+
+    let mut deleted_file = false;
+    if body.delete_file {
+        if let Some(path) = model.local_path.as_deref() {
+            match std::fs::remove_file(path) {
+                Ok(()) => deleted_file = true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        error.to_string(),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "status": "deleted",
+        "model_id": body.model_id,
+        "deleted_file": deleted_file
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
