@@ -22,7 +22,7 @@ use std::{
     path::{Component, PathBuf},
     process::Command,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{io::AsyncWriteExt, sync::RwLock};
 use tower_http::cors::CorsLayer;
@@ -451,6 +451,31 @@ async fn huggingface_auth_check(
     .into_response()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::calculate_eta_seconds;
+
+    #[test]
+    fn eta_uses_remaining_bytes_and_speed() {
+        assert_eq!(calculate_eta_seconds(40, Some(100), Some(20.0)), Some(3));
+    }
+
+    #[test]
+    fn eta_is_unknown_without_total_size() {
+        assert_eq!(calculate_eta_seconds(40, None, Some(20.0)), None);
+    }
+
+    #[test]
+    fn eta_is_unknown_without_speed() {
+        assert_eq!(calculate_eta_seconds(40, Some(100), None), None);
+    }
+
+    #[test]
+    fn eta_is_zero_when_download_is_complete() {
+        assert_eq!(calculate_eta_seconds(100, Some(100), Some(20.0)), Some(0));
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DownloadJob {
     pub id: String,
@@ -459,6 +484,8 @@ pub struct DownloadJob {
     pub status: String,
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
+    pub speed_bytes_per_sec: Option<f64>,
+    pub eta_seconds: Option<u64>,
     pub local_path: Option<String>,
     pub error: Option<String>,
     #[serde(default)]
@@ -613,6 +640,8 @@ async fn huggingface_download(
         status: "queued".to_string(),
         downloaded_bytes: 0,
         total_bytes: body.size_bytes,
+        speed_bytes_per_sec: None,
+        eta_seconds: None,
         local_path: Some(local_path.to_string_lossy().to_string()),
         error: None,
         cancel_requested: false,
@@ -813,6 +842,8 @@ async fn download_huggingface_file(
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(&local_path).await?;
     let mut downloaded = 0_u64;
+    let mut last_sample_at = Instant::now();
+    let mut last_sample_bytes = 0_u64;
 
     while let Some(chunk) = stream.next().await {
         if download_cancel_requested(&downloads, &job_id).await {
@@ -823,10 +854,19 @@ async fn download_huggingface_file(
         let chunk = chunk?;
         file.write_all(&chunk).await?;
         downloaded += chunk.len() as u64;
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_sample_at).as_secs_f64();
+        let speed = (elapsed > 0.0)
+            .then(|| (downloaded.saturating_sub(last_sample_bytes) as f64) / elapsed)
+            .filter(|value| value.is_finite() && *value > 0.0);
+        last_sample_at = now;
+        last_sample_bytes = downloaded;
         let mut jobs = downloads.write().await;
         if let Some(job) = jobs.get_mut(&job_id) {
             job.downloaded_bytes = downloaded;
             job.total_bytes = total;
+            job.speed_bytes_per_sec = speed;
+            job.eta_seconds = calculate_eta_seconds(downloaded, total, speed);
         }
     }
     file.flush().await?;
@@ -846,8 +886,23 @@ async fn download_huggingface_file(
         job.status = "downloaded".to_string();
         job.downloaded_bytes = downloaded;
         job.total_bytes = total;
+        job.speed_bytes_per_sec = None;
+        job.eta_seconds = Some(0);
     }
     Ok(())
+}
+
+fn calculate_eta_seconds(
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    speed_bytes_per_sec: Option<f64>,
+) -> Option<u64> {
+    let total = total_bytes?;
+    let speed = speed_bytes_per_sec?;
+    if total <= downloaded_bytes || speed <= 0.0 || !speed.is_finite() {
+        return Some(0);
+    }
+    Some(((total - downloaded_bytes) as f64 / speed).ceil() as u64)
 }
 
 fn is_cancellable(status: &str) -> bool {

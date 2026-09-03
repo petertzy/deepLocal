@@ -75,6 +75,8 @@ type DownloadJob = {
   status: string;
   downloaded_bytes: number;
   total_bytes?: number | null;
+  speed_bytes_per_sec?: number | null;
+  eta_seconds?: number | null;
   local_path?: string | null;
   error?: string | null;
   cancel_requested?: boolean;
@@ -441,6 +443,8 @@ function Models({
         status: "starting",
         downloaded_bytes: 0,
         total_bytes: sizeBytes ?? null,
+        speed_bytes_per_sec: null,
+        eta_seconds: null,
       },
     }));
     const res = await fetch(`${API_BASE}/runtime/huggingface/download`, {
@@ -461,6 +465,8 @@ function Models({
           status: "error",
           downloaded_bytes: 0,
           total_bytes: sizeBytes ?? null,
+          speed_bytes_per_sec: null,
+          eta_seconds: null,
           error: message || `Failed to start download for ${filename}.`,
         },
       }));
@@ -599,6 +605,7 @@ function Models({
                     <em>
                       {downloadPercent(job)} / {formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}
                     </em>
+                    <em>{downloadSpeedAndEta(job)}</em>
                     {job.error && <p>{job.error}</p>}
                   </div>
                 ) : null}
@@ -1067,6 +1074,30 @@ function formatFileSize(bytes?: number | null) {
 function formatTransferredSize(bytes: number) {
   if (!bytes) return "0 MB";
   return formatFileSize(bytes);
+}
+
+function downloadSpeedAndEta(job: DownloadJob) {
+  const speed = formatDownloadSpeed(job.speed_bytes_per_sec);
+  if (!job.total_bytes) return `${speed} / ETA unknown`;
+  return `${speed} / ${formatEta(job.eta_seconds)}`;
+}
+
+function formatDownloadSpeed(bytesPerSecond?: number | null) {
+  if (!bytesPerSecond || !Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return "Speed pending";
+  }
+  return `${(bytesPerSecond / 1024 / 1024).toFixed(1)} MB/s`;
+}
+
+function formatEta(seconds?: number | null) {
+  if (seconds === null || seconds === undefined) return "ETA pending";
+  if (seconds <= 0) return "ETA now";
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 1) return `ETA ${remainingSeconds}s`;
+  if (minutes < 60) return `ETA ${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `ETA ${hours}h ${minutes % 60}m`;
 }
 
 function flattenSearchResults(results: HuggingFaceResult[]) {
