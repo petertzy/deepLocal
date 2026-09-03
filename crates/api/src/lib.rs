@@ -116,6 +116,7 @@ async fn register_model(
     State(state): State<Arc<ApiState>>,
     Json(model): Json<ModelDescriptor>,
 ) -> impl IntoResponse {
+    let model = absolutize_model_paths(model);
     state.runtime.register_model(model.clone()).await;
     (axum::http::StatusCode::CREATED, Json(model)).into_response()
 }
@@ -585,7 +586,34 @@ async fn huggingface_download(
 }
 
 fn models_root() -> PathBuf {
-    PathBuf::from("./models")
+    absolute_path(PathBuf::from("./models"))
+}
+
+fn absolutize_model_paths(mut model: ModelDescriptor) -> ModelDescriptor {
+    if let Some(path) = model.local_path.as_deref() {
+        model.local_path = Some(absolute_path_string(path));
+    }
+    for file in &mut model.files {
+        if let Some(path) = file.path.as_deref() {
+            file.path = Some(absolute_path_string(path));
+        }
+    }
+    model
+}
+
+fn absolute_path_string(path: &str) -> String {
+    absolute_path(PathBuf::from(path))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn absolute_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    env::current_dir()
+        .map(|current| current.join(&path))
+        .unwrap_or(path)
 }
 
 fn huggingface_resolve_url(repo: &str, filename: &str) -> String {

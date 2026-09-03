@@ -5,6 +5,7 @@ import {
   Activity,
   ArrowRight,
   Boxes,
+  Check,
   Copy,
   Cpu,
   Download,
@@ -478,16 +479,18 @@ function Models({
     onNotice(res.ok ? `Opened ${modelsDirectory}.` : `Failed to open ${modelsDirectory}.`);
   }
 
-  async function copyModelPath(model: ModelDescriptor) {
-    if (!model.local_path) {
+  async function copyModelPath(model: ModelDescriptor, modelPath: string | null) {
+    if (!modelPath) {
       onNotice(`No local path registered for ${model.name}.`);
-      return;
+      return false;
     }
     try {
-      await navigator.clipboard.writeText(model.local_path);
+      await navigator.clipboard.writeText(modelPath);
       onNotice(`Copied path for ${model.name}.`);
+      return true;
     } catch {
-      onNotice(`Copy failed. Path: ${model.local_path}`);
+      onNotice(`Copy failed. Path: ${modelPath}`);
+      return false;
     }
   }
 
@@ -579,6 +582,7 @@ function Models({
       <div className="grid">
         {models.map((model) => {
           const handle = loaded.find((item) => item.id === model.id);
+          const modelPath = resolveModelPath(model.local_path, modelsDirectory);
           return (
             <article key={model.id}>
               <h2>{model.name}</h2>
@@ -586,11 +590,8 @@ function Models({
                 {model.source} / {model.format}
               </p>
               <div className="modelPath">
-                <span>{model.local_path ?? "No local path registered"}</span>
-                <button disabled={!model.local_path} onClick={() => copyModelPath(model)}>
-                  <Copy size={15} />
-                  Copy
-                </button>
+                <span>{modelPath ?? "No local path registered"}</span>
+                <CopyButton disabled={!modelPath} onCopy={() => copyModelPath(model, modelPath)} />
               </div>
               <div className="actions">
                 {handle ? (
@@ -651,8 +652,10 @@ function ServerPanel({
     try {
       await navigator.clipboard.writeText(value);
       onNotice(`Copied ${label}.`);
+      return true;
     } catch {
       onNotice(`Copy failed. ${label}: ${value}`);
+      return false;
     }
   }
 
@@ -666,7 +669,7 @@ function ServerPanel({
         <ApiEndpoint title="Base URL" value={baseUrl} onCopy={() => copyText("Base URL", baseUrl)} />
         <ApiEndpoint title="Models" value={modelsUrl} onCopy={() => copyText("Models URL", modelsUrl)} />
         <ApiEndpoint title="Chat Completions" value={chatUrl} onCopy={() => copyText("Chat Completions URL", chatUrl)} />
-        <ApiEndpoint title="Model ID" value={activeModel ?? "Load a model first"} disabled={!activeModel} onCopy={() => activeModel && copyText("Model ID", activeModel)} />
+        <ApiEndpoint title="Model ID" value={activeModel ?? "Load a model first"} disabled={!activeModel} onCopy={() => (activeModel ? copyText("Model ID", activeModel) : false)} />
       </div>
       {!activeModel && (
         <EmptyState
@@ -700,10 +703,7 @@ function ServerPanel({
       </div>
       <div className="codeHeader">
         <h2>curl</h2>
-        <button onClick={() => copyText("curl example", curlExample)}>
-          <Copy size={15} />
-          Copy
-        </button>
+        <CopyButton onCopy={() => copyText("curl example", curlExample)} />
       </div>
       <pre>{curlExample}</pre>
     </div>
@@ -753,17 +753,32 @@ function ApiEndpoint({
   title: string;
   value: string;
   disabled?: boolean;
-  onCopy: () => void;
+  onCopy: () => Promise<boolean> | boolean;
 }) {
   return (
     <div className="apiEndpoint">
       <span>{title}</span>
       <code>{value}</code>
-      <button disabled={disabled} onClick={onCopy}>
-        <Copy size={15} />
-        Copy
-      </button>
+      <CopyButton disabled={disabled} onCopy={onCopy} />
     </div>
+  );
+}
+
+function CopyButton({ disabled, onCopy }: { disabled?: boolean; onCopy: () => Promise<boolean> | boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    const ok = await onCopy();
+    if (!ok) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  return (
+    <button className={`copyButton ${copied ? "copied" : ""}`} disabled={disabled} onClick={handleCopy}>
+      {copied ? <Check size={15} /> : <Copy size={15} />}
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 
@@ -859,6 +874,28 @@ function createLocalDescriptor(id: string, path: string): ModelDescriptor & Reco
     created_at: now,
     updated_at: now,
   };
+}
+
+function resolveModelPath(path: string | null | undefined, modelsDirectory: string) {
+  if (!path) return null;
+  if (isAbsolutePath(path)) return path;
+
+  const trimmedPath = path.replace(/^\.\//, "");
+  const normalizedModelsDirectory = modelsDirectory.replace(/\/+$/, "");
+
+  if (trimmedPath === "models") return normalizedModelsDirectory;
+  if (trimmedPath.startsWith("models/")) {
+    return `${normalizedModelsDirectory}/${trimmedPath.slice("models/".length)}`;
+  }
+
+  const projectRoot = normalizedModelsDirectory.endsWith("/models")
+    ? normalizedModelsDirectory.slice(0, -"models".length).replace(/\/+$/, "")
+    : normalizedModelsDirectory;
+  return `${projectRoot}/${trimmedPath}`;
+}
+
+function isAbsolutePath(path: string) {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
 function formatBytes(bytes: number) {

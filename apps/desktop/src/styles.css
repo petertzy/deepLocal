@@ -28,6 +28,21 @@ button {
   border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease,
+    transform 80ms ease;
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px) scale(0.98);
+}
+
+button:focus-visible {
+  outline: 2px solid #81b8aa;
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -347,12 +362,32 @@ article p {
 }
 
 .actions button,
-.modelPath button,
 .modelTools button,
 .composer button {
   padding: 0 12px;
   color: #ffffff;
   background: #172026;
+}
+
+.copyButton {
+  min-width: 86px;
+  padding: 0 12px;
+  border: 1px solid #cfd6da;
+  color: #172026;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(23, 32, 38, 0.06);
+}
+
+.copyButton:hover:not(:disabled) {
+  border-color: #9fb0b7;
+  background: #f7f9f9;
+}
+
+.copyButton.copied {
+  border-color: #8fc7b7;
+  color: #245f53;
+  background: #e7f5f0;
+  box-shadow: 0 0 0 3px rgba(47, 111, 98, 0.12);
 }
 
 .modelPath {
