@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import remarkGfm from "remark-gfm";
 import {
   Activity,
   ArrowRight,
@@ -54,6 +57,11 @@ type LoadedModel = {
   status: string;
 };
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 type HuggingFaceResult = {
   repo: string;
   downloads?: number | null;
@@ -84,6 +92,7 @@ type DownloadJob = {
 };
 
 const API_BASE = "http://127.0.0.1:14567";
+const CHAT_STORAGE_KEY = "deeplocal:chat-messages";
 
 function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -268,8 +277,12 @@ function ProgressItem({ done, title, detail }: { done?: boolean; title: string; 
 
 function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpenModels: () => void; onNotice: (message: string) => void }) {
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
-  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredChatMessages());
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
+
+  useEffect(() => {
+    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+  }, [messages]);
 
   async function send() {
     const prompt = input.trim();
@@ -279,7 +292,8 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
       onNotice("Load a model before chatting.");
       return;
     }
-    setMessages((items) => [...items, { role: "user", content: prompt }]);
+    const nextMessages: ChatMessage[] = [...messages, { role: "user", content: prompt }];
+    setMessages(nextMessages);
     setInput("");
     try {
       const res = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -288,7 +302,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
         body: JSON.stringify({
           model: activeModel,
           stream: false,
-          messages: [{ role: "user", content: prompt }],
+          messages: nextMessages,
         }),
       });
       const data = await res.json();
@@ -301,11 +315,22 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
     }
   }
 
+  function clearChat() {
+    setMessages([]);
+    window.localStorage.removeItem(CHAT_STORAGE_KEY);
+    onNotice("Chat history cleared.");
+  }
+
   return (
     <div className="pane chat">
       <div className="chatMeta">
         <Boxes size={18} />
-        <span>Active model: {activeModel ?? "No model loaded"}</span>
+        <span className="activeModel" title={activeModel ?? "No model loaded"}>
+          Active model: {activeModel ?? "No model loaded"}
+        </span>
+        <button className="iconButton" disabled={!messages.length} title="Clear chat history" onClick={clearChat}>
+          <Trash2 size={16} />
+        </button>
       </div>
       <div className="transcript">
         {!messages.length && !activeModel ? (
@@ -319,7 +344,51 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
         ) : (
           messages.map((message, index) => (
             <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              {message.role === "assistant" ? <ReactMarkdown>{normalizeMarkdown(message.content)}</ReactMarkdown> : message.content}
+              {message.role === "assistant" ? (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    code({ className, children, ...props }) {
+                      const language = /language-(\w+)/.exec(className ?? "")?.[1];
+                      const code = String(children).replace(/\n$/, "");
+
+                      if (language) {
+                        return (
+                          <SyntaxHighlighter
+                            PreTag="div"
+                            className="codeBlock"
+                            language={language}
+                            style={oneLight}
+                            customStyle={{
+                              margin: 0,
+                              padding: 0,
+                              background: "transparent",
+                            }}
+                            codeTagProps={{
+                              style: {
+                                background: "transparent",
+                                fontFamily: "inherit",
+                              },
+                            }}
+                          >
+                            {code}
+                          </SyntaxHighlighter>
+                        );
+                      }
+
+                      return (
+                        <code className={className} {...props}>
+                          {children}
+                        </code>
+                      );
+                    },
+                  }}
+                >
+                  {normalizeMarkdown(message.content)}
+                </ReactMarkdown>
+              ) : (
+                message.content
+              )}
             </div>
           ))
         )}
@@ -1247,10 +1316,60 @@ function downloadStatusLabel(status: string) {
 }
 
 function normalizeMarkdown(content: string) {
-  return content
+  return unwrapMarkdownTableCodeFences(content)
     .replace(/\\\*/g, "*")
     .replace(/\\_/g, "_")
     .replace(/\\`/g, "`");
+}
+
+function unwrapMarkdownTableCodeFences(content: string) {
+  return content.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (match, language: string, code: string) => {
+    const normalizedLanguage = language.trim().toLowerCase();
+    if (normalizedLanguage && normalizedLanguage !== "markdown" && normalizedLanguage !== "md") {
+      return match;
+    }
+
+    const table = code.trim();
+    return isMarkdownTable(table) ? table : match;
+  });
+}
+
+function isMarkdownTable(content: string) {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) return false;
+  if (!lines.every((line) => line.includes("|"))) return false;
+
+  return lines.some((line) => {
+    const cells = line
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter(Boolean);
+
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  });
+}
+
+function loadStoredChatMessages(): ChatMessage[] {
+  try {
+    const stored = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter(
+      (message): message is ChatMessage =>
+        message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string",
+    );
+  } catch {
+    return [];
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

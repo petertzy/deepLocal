@@ -680,6 +680,15 @@ progress {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.activeModel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .transcript {
@@ -690,6 +699,7 @@ progress {
 }
 
 .message {
+  min-width: 0;
   max-width: 780px;
   border-radius: 8px;
   padding: 12px;
@@ -702,20 +712,23 @@ progress {
 }
 
 .message.assistant {
+  width: min(780px, 100%);
   background: #f1f3f4;
 }
 
 .message.assistant p,
 .message.assistant ul,
 .message.assistant ol,
-.message.assistant pre {
+.message.assistant pre,
+.message.assistant table {
   margin: 0 0 10px;
 }
 
 .message.assistant p:last-child,
 .message.assistant ul:last-child,
 .message.assistant ol:last-child,
-.message.assistant pre:last-child {
+.message.assistant pre:last-child,
+.message.assistant table:last-child {
   margin-bottom: 0;
 }
 
@@ -740,9 +753,46 @@ progress {
   padding: 2px 5px;
 }
 
+.message.assistant pre {
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 14px;
+  border: 1px solid #dde2e4;
+  background: #ffffff;
+}
+
 .message.assistant pre code {
   display: block;
   padding: 0;
+}
+
+.message.assistant .codeBlock {
+  overflow: visible !important;
+  min-width: max-content;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message.assistant table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.message.assistant th,
+.message.assistant td {
+  padding: 7px 10px;
+  border: 1px solid #cfd6da;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message.assistant th {
+  color: #172026;
+  background: #ffffff;
+  font-weight: 700;
 }
 
 .composer {
