@@ -357,6 +357,7 @@ article p {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 4px;
 }
@@ -388,6 +389,28 @@ article p {
   color: #245f53;
   background: #e7f5f0;
   box-shadow: 0 0 0 3px rgba(47, 111, 98, 0.12);
+}
+
+.secondaryAction,
+.iconButton {
+  border: 1px solid #cfd6da;
+  color: #172026;
+  background: #ffffff;
+}
+
+.secondaryAction {
+  padding: 0 12px;
+}
+
+.iconButton {
+  width: 38px;
+  padding: 0;
+}
+
+.secondaryAction:hover:not(:disabled),
+.iconButton:hover:not(:disabled) {
+  border-color: #9fb0b7;
+  background: #f7f9f9;
 }
 
 .modelPath {
@@ -748,6 +771,88 @@ label {
   margin-top: 4px;
 }
 
+.drawerLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(23, 32, 38, 0.34);
+}
+
+.detailsDrawer {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 18px;
+  width: min(420px, 100%);
+  height: 100%;
+  padding: 20px;
+  overflow: auto;
+  border-left: 1px solid #cfd6da;
+  background: #ffffff;
+  box-shadow: -14px 0 34px rgba(23, 32, 38, 0.16);
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawerHeader span,
+.detailItem span {
+  color: #66727a;
+  font-size: 13px;
+}
+
+.drawerHeader h2 {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.detailList {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.detailItem {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #edf0f1;
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.detailItem strong {
+  min-width: 0;
+  color: #202428;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.drawerActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #edf0f1;
+}
+
+.drawerActions button {
+  padding: 0 12px;
+}
+
+.drawerActions button:not(.copyButton) {
+  color: #ffffff;
+  background: #172026;
+}
+
 .settingsGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -823,6 +928,21 @@ label {
 
   .headerActions {
     display: grid;
+  }
+
+  .drawerLayer {
+    align-items: end;
+  }
+
+  .detailsDrawer {
+    width: 100%;
+    height: min(86vh, 720px);
+    border-top: 1px solid #cfd6da;
+    border-left: 0;
+  }
+
+  .drawerActions {
+    grid-template-columns: 1fr;
   }
 
   .dashboard,

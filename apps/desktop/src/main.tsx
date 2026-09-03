@@ -10,6 +10,7 @@ import {
   Cpu,
   Download,
   FolderOpen,
+  Info,
   MessageSquare,
   Play,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   Server,
   Settings,
   Square,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
@@ -39,7 +41,9 @@ type ModelDescriptor = {
   source: string;
   format: string;
   local_path?: string | null;
+  size_bytes?: number | null;
   capabilities?: string[];
+  files?: Array<{ filename: string; path?: string | null; size_bytes?: number | null; sha256?: string | null }>;
 };
 
 type LoadedModel = {
@@ -339,6 +343,7 @@ function Models({
   const [results, setResults] = useState<HuggingFaceResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
+  const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
 
   const downloadByFile = useMemo(() => {
     const items = new Map<string, DownloadJob>();
@@ -494,6 +499,23 @@ function Models({
     }
   }
 
+  async function revealModel(model: ModelDescriptor, modelPath: string | null) {
+    if (!modelPath) {
+      onNotice(`No local path registered for ${model.name}.`);
+      return;
+    }
+    const res = await fetch(`${API_BASE}/runtime/models/reveal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: modelPath }),
+    });
+    onNotice(res.ok ? `Revealed ${model.name}.` : `Failed to reveal ${model.name}.`);
+  }
+
+  const detailsModel = models.find((model) => model.id === detailsModelId) ?? null;
+  const detailsHandle = detailsModel ? loaded.find((item) => item.id === detailsModel.id) ?? null : null;
+  const detailsPath = detailsModel ? resolveModelPath(detailsModel.local_path, modelsDirectory) : null;
+
   return (
     <div className="pane">
       <div className="paneHeader">
@@ -606,6 +628,10 @@ function Models({
                   </button>
                 )}
                 <span>{handle?.status ?? "registered"}</span>
+                <button className="secondaryAction" onClick={() => setDetailsModelId(model.id)}>
+                  <Info size={15} />
+                  Details
+                </button>
               </div>
             </article>
           );
@@ -620,6 +646,18 @@ function Models({
           />
         )}
       </div>
+      {detailsModel && (
+        <ModelDetailsDrawer
+          model={detailsModel}
+          modelPath={detailsPath}
+          handle={detailsHandle}
+          onClose={() => setDetailsModelId(null)}
+          onCopyPath={() => copyModelPath(detailsModel, detailsPath)}
+          onLoad={() => load(detailsModel.id)}
+          onUnload={() => unload(detailsModel.id)}
+          onReveal={() => revealModel(detailsModel, detailsPath)}
+        />
+      )}
     </div>
   );
 }
@@ -741,6 +779,97 @@ function EmptyState({
         </button>
       )}
     </section>
+  );
+}
+
+function ModelDetailsDrawer({
+  model,
+  modelPath,
+  handle,
+  onClose,
+  onCopyPath,
+  onLoad,
+  onUnload,
+  onReveal,
+}: {
+  model: ModelDescriptor;
+  modelPath: string | null;
+  handle: LoadedModel | null;
+  onClose: () => void;
+  onCopyPath: () => Promise<boolean>;
+  onLoad: () => Promise<void>;
+  onUnload: () => Promise<void>;
+  onReveal: () => Promise<void>;
+}) {
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const capabilities = model.capabilities?.length ? model.capabilities.join(", ") : "None listed";
+  const loadState = handle ? handle.status : "Not loaded";
+
+  return (
+    <div className="drawerLayer" role="presentation" onMouseDown={onClose}>
+      <aside
+        className="detailsDrawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-details-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="drawerHeader">
+          <div>
+            <span>Model details</span>
+            <h2 id="model-details-title">{model.name}</h2>
+          </div>
+          <button className="iconButton" aria-label="Close model details" autoFocus onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="detailList">
+          <DetailItem label="Model ID" value={model.id} />
+          <DetailItem label="Source" value={model.source} />
+          <DetailItem label="Format" value={String(model.format)} />
+          <DetailItem label="Path" value={modelPath ?? "No local path registered"} />
+          <DetailItem label="Size" value={formatFileSize(model.size_bytes ?? model.files?.find((file) => file.size_bytes)?.size_bytes)} />
+          <DetailItem label="Capabilities" value={capabilities} />
+          <DetailItem label="Load state" value={loadState} />
+        </div>
+
+        <div className="drawerActions">
+          <CopyButton disabled={!modelPath} onCopy={onCopyPath} />
+          {handle ? (
+            <button onClick={onUnload}>
+              <Square size={15} />
+              Unload
+            </button>
+          ) : (
+            <button onClick={onLoad}>
+              <Play size={15} />
+              Load
+            </button>
+          )}
+          <button disabled={!modelPath} onClick={onReveal}>
+            <FolderOpen size={15} />
+            Reveal
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="detailItem">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -878,20 +1007,28 @@ function createLocalDescriptor(id: string, path: string): ModelDescriptor & Reco
 
 function resolveModelPath(path: string | null | undefined, modelsDirectory: string) {
   if (!path) return null;
-  if (isAbsolutePath(path)) return path;
+  if (isAbsolutePath(path)) return normalizeDisplayPath(path);
 
   const trimmedPath = path.replace(/^\.\//, "");
-  const normalizedModelsDirectory = modelsDirectory.replace(/\/+$/, "");
+  const normalizedModelsDirectory = normalizeDisplayPath(modelsDirectory).replace(/\/+$/, "");
 
   if (trimmedPath === "models") return normalizedModelsDirectory;
   if (trimmedPath.startsWith("models/")) {
-    return `${normalizedModelsDirectory}/${trimmedPath.slice("models/".length)}`;
+    return normalizeDisplayPath(`${normalizedModelsDirectory}/${trimmedPath.slice("models/".length)}`);
   }
 
   const projectRoot = normalizedModelsDirectory.endsWith("/models")
     ? normalizedModelsDirectory.slice(0, -"models".length).replace(/\/+$/, "")
     : normalizedModelsDirectory;
-  return `${projectRoot}/${trimmedPath}`;
+  return normalizeDisplayPath(`${projectRoot}/${trimmedPath}`);
+}
+
+function normalizeDisplayPath(path: string) {
+  let normalized = path;
+  while (normalized.includes("/./")) {
+    normalized = normalized.replace(/\/\.\//g, "/");
+  }
+  return normalized;
 }
 
 function isAbsolutePath(path: string) {
