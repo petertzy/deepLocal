@@ -10,6 +10,7 @@ BACKEND_ALREADY_RUNNING=0
 FRONTEND_ALREADY_RUNNING=0
 RESTART=0
 STOP=0
+BUILD=0
 
 cleanup() {
   if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
@@ -95,19 +96,34 @@ if [[ "${1:-}" == "--restart" ]]; then
   RESTART=1
 elif [[ "${1:-}" == "--stop" ]]; then
   STOP=1
+elif [[ "${1:-}" == "--build" ]]; then
+  BUILD=1
 elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  echo "Usage: ./scripts/start-dev.sh [--restart|--stop]"
+  echo "Usage: ./scripts/start-dev.sh [--restart|--stop|--build]"
   echo
   echo "Starts the deepLocal backend and frontend development servers."
   echo "Installs llama.cpp automatically on macOS with Homebrew if llama-server is missing."
   echo "Use --restart to stop existing processes on ports $BACKEND_PORT and $FRONTEND_PORT first."
   echo "Use --stop to stop processes on ports $BACKEND_PORT and $FRONTEND_PORT."
+  echo "Use --build to run the desktop frontend production build from the project root."
   echo "Set DEEPLOCAL_SKIP_LLAMA_INSTALL=1 to skip automatic llama.cpp installation."
   exit 0
 fi
 
-require_command cargo
 require_command npm
+
+if [[ "$BUILD" -eq 1 ]]; then
+  cd "$DESKTOP_DIR"
+  if [[ ! -d node_modules ]]; then
+    echo "Installing frontend dependencies..."
+    npm install
+  fi
+  echo "Building deepLocal desktop UI..."
+  npm run build
+  exit 0
+fi
+
+require_command cargo
 require_command lsof
 require_command curl
 

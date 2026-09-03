@@ -24,6 +24,7 @@ import "./styles.css";
 
 type Tab = "dashboard" | "chat" | "models" | "server" | "settings";
 type Health = "online" | "offline";
+type SearchSort = "downloads" | "likes" | "smallest-file" | "largest-file" | "name";
 
 type HardwareProfile = {
   os: string;
@@ -57,6 +58,14 @@ type HuggingFaceResult = {
   downloads?: number | null;
   likes?: number | null;
   files: Array<{ filename: string; size_bytes?: number | null }>;
+};
+
+type HuggingFaceModelFile = {
+  repo: string;
+  filename: string;
+  size_bytes?: number | null;
+  downloads?: number | null;
+  likes?: number | null;
 };
 
 type DownloadJob = {
@@ -341,6 +350,7 @@ function Models({
   const [path, setPath] = useState("");
   const [query, setQuery] = useState("Gemma 3 1b");
   const [results, setResults] = useState<HuggingFaceResult[]>([]);
+  const [sortBy, setSortBy] = useState<SearchSort>("downloads");
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
@@ -515,6 +525,7 @@ function Models({
   const detailsModel = models.find((model) => model.id === detailsModelId) ?? null;
   const detailsHandle = detailsModel ? loaded.find((item) => item.id === detailsModel.id) ?? null : null;
   const detailsPath = detailsModel ? resolveModelPath(detailsModel.local_path, modelsDirectory) : null;
+  const sortedFiles = useMemo(() => sortSearchFiles(flattenSearchResults(results), sortBy), [results, sortBy]);
 
   return (
     <div className="pane">
@@ -535,11 +546,20 @@ function Models({
       <section className="discoverPanel">
         <div className="sectionTitle">
           <h2>Hugging Face GGUF search</h2>
-          <span>{searching ? "searching" : `${results.length} repos`}</span>
+          <span>{searching ? "searching" : `${sortedFiles.length} files`}</span>
         </div>
-        <p className="filterNotice">Search excludes uncensored, NSFW, and selected China-origin model families.</p>
         <div className="searchRow">
           <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchHuggingFace()} />
+          <label className="sortControl">
+            <span>Sort</span>
+            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SearchSort)}>
+              <option value="downloads">Repo downloads (source)</option>
+              <option value="likes">Repo likes (source)</option>
+              <option value="smallest-file">Smallest file</option>
+              <option value="largest-file">Largest file</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
           <button onClick={searchHuggingFace}>
             <Download size={16} />
             Search
@@ -556,44 +576,42 @@ function Models({
               onAction={searching ? undefined : searchHuggingFace}
             />
           )}
-          {results.map((result) => (
-            <article key={result.repo}>
-              <h2>{result.repo}</h2>
-              <p>
-                {result.downloads ?? 0} downloads / {result.likes ?? 0} likes
-              </p>
-              <div className="fileList">
-                {result.files.slice(0, 5).map((file) => {
-                  const key = downloadKey(result.repo, file.filename);
-                  const job = downloadByFile.get(key) ?? pendingDownloads[key];
-                  const canCancel = !!job && ["queued", "starting", "downloading", "cancelling"].includes(job.status);
-                  return (
-                    <div className={`fileRow ${job ? "hasDownload" : ""}`} key={`${result.repo}-${file.filename}`}>
-                      <span>{file.filename}</span>
-                      <strong>{formatFileSize(file.size_bytes)}</strong>
-                      {job ? (
-                        <div className="inlineDownload">
-                          <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
-                          <progress value={job.downloaded_bytes} max={job.total_bytes ?? (job.downloaded_bytes || 1)} />
-                          <em>
-                            {downloadPercent(job)} / {formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}
-                          </em>
-                          {job.error && <p>{job.error}</p>}
-                        </div>
-                      ) : null}
-                      <button
-                        disabled={job?.status === "cancelling"}
-                        onClick={() => (canCancel ? cancelDownload(job) : downloadFile(result.repo, file.filename, file.size_bytes))}
-                      >
-                        <Download size={15} />
-                        {job ? downloadActionLabel(job) : "Download"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+          {sortedFiles.map((file) => {
+            const key = downloadKey(file.repo, file.filename);
+            const job = downloadByFile.get(key) ?? pendingDownloads[key];
+            const canCancel = !!job && ["queued", "starting", "downloading", "cancelling"].includes(job.status);
+            return (
+              <article className="searchModelCard" key={`${file.repo}-${file.filename}`}>
+                <div>
+                  <h2>{file.filename}</h2>
+                  <p>{file.repo}</p>
+                </div>
+                <div className="modelFileMeta">
+                  <span>{formatFileSize(file.size_bytes)}</span>
+                  <span>{modelQuantizationLabel(file.filename)}</span>
+                  <span>{file.downloads ?? 0} source downloads</span>
+                  <span>{file.likes ?? 0} source likes</span>
+                </div>
+                {job ? (
+                  <div className="inlineDownload">
+                    <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
+                    <progress value={job.downloaded_bytes} max={job.total_bytes ?? (job.downloaded_bytes || 1)} />
+                    <em>
+                      {downloadPercent(job)} / {formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}
+                    </em>
+                    {job.error && <p>{job.error}</p>}
+                  </div>
+                ) : null}
+                <button
+                  disabled={job?.status === "cancelling"}
+                  onClick={() => (canCancel ? cancelDownload(job) : downloadFile(file.repo, file.filename, file.size_bytes))}
+                >
+                  <Download size={15} />
+                  {job ? downloadActionLabel(job) : "Download"}
+                </button>
             </article>
-          ))}
+            );
+          })}
         </div>
       </section>
       <div className="modelTools">
@@ -1049,6 +1067,43 @@ function formatFileSize(bytes?: number | null) {
 function formatTransferredSize(bytes: number) {
   if (!bytes) return "0 MB";
   return formatFileSize(bytes);
+}
+
+function flattenSearchResults(results: HuggingFaceResult[]) {
+  return results.flatMap((result) =>
+    result.files.map((file) => ({
+      repo: result.repo,
+      filename: file.filename,
+      size_bytes: file.size_bytes,
+      downloads: result.downloads,
+      likes: result.likes,
+    })),
+  );
+}
+
+function sortSearchFiles(files: HuggingFaceModelFile[], sortBy: SearchSort) {
+  return [...files].sort((a, b) => {
+    if (sortBy === "name") return a.filename.localeCompare(b.filename) || a.repo.localeCompare(b.repo);
+    if (sortBy === "likes") return compareNumbersDesc(a.likes, b.likes) || a.filename.localeCompare(b.filename);
+    if (sortBy === "smallest-file") return compareNumbersAsc(a.size_bytes, b.size_bytes) || a.filename.localeCompare(b.filename);
+    if (sortBy === "largest-file") return compareNumbersDesc(a.size_bytes, b.size_bytes) || a.filename.localeCompare(b.filename);
+    return compareNumbersDesc(a.downloads, b.downloads) || a.filename.localeCompare(b.filename);
+  });
+}
+
+function modelQuantizationLabel(filename: string) {
+  const match = filename.match(/(?:^|[-_.])((?:BF|F|Q|IQ)\d{1,2}(?:_[A-Z0-9]+)?|BF16|F16)(?=\.|[-_])/i);
+  return match?.[1]?.toUpperCase() ?? "GGUF";
+}
+
+function compareNumbersDesc(a?: number | null, b?: number | null) {
+  return compareNumbersAsc(b, a);
+}
+
+function compareNumbersAsc(a?: number | null, b?: number | null) {
+  const left = typeof a === "number" ? a : Number.POSITIVE_INFINITY;
+  const right = typeof b === "number" ? b : Number.POSITIVE_INFINITY;
+  return left - right;
 }
 
 function downloadPercent(job: DownloadJob) {

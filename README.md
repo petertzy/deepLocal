@@ -42,6 +42,7 @@ Useful commands:
 ```bash
 ./scripts/start-dev.sh --restart
 ./scripts/start-dev.sh --stop
+./scripts/start-dev.sh --build
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
 
@@ -155,7 +156,7 @@ Useful local checks:
 ```bash
 cargo check
 cargo test
-cd apps/desktop && npm install && npm run build
+./scripts/start-dev.sh --build
 ```
 
 Do not commit downloaded models, tokens, local databases, `target/`,

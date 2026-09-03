@@ -466,16 +466,24 @@ article p {
 }
 
 .searchRow {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
-.filterNotice {
+.sortControl {
+  display: grid;
+  grid-template-columns: auto 210px;
+  align-items: center;
+  gap: 8px;
+}
+
+.sortControl span {
   color: #66727a;
   font-size: 13px;
 }
 
 .searchRow button,
-.fileRow button {
+.fileRow button,
+.searchModelCard > button {
   padding: 0 12px;
   color: #ffffff;
   background: #2f6f62;
@@ -486,6 +494,40 @@ article p {
   gap: 12px;
   max-height: 420px;
   overflow: auto;
+}
+
+.searchModelCard {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, auto) 150px;
+  align-items: center;
+}
+
+.searchModelCard h2,
+.searchModelCard p {
+  overflow-wrap: anywhere;
+}
+
+.searchModelCard .inlineDownload {
+  grid-column: 1 / -1;
+}
+
+.searchModelCard > button {
+  justify-self: end;
+  width: 150px;
+}
+
+.modelFileMeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.modelFileMeta span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #445057;
+  background: #eef2f1;
+  font-size: 12px;
 }
 
 .fileList {
@@ -948,12 +990,24 @@ label {
   .dashboard,
   .downloadRow,
   .fileRow,
+  .searchModelCard,
   .apiEndpoint,
   .modelTools,
   .modelPath,
   .composer,
+  .searchRow,
+  .sortControl,
   .emptyState {
     grid-template-columns: 1fr;
+  }
+
+  .searchModelCard > button {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .modelFileMeta {
+    justify-content: flex-start;
   }
 
   .emptyState {

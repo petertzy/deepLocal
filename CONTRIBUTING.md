@@ -50,7 +50,7 @@ Run these before opening a pull request when possible:
 ```bash
 cargo check
 cargo test
-cd apps/desktop && npm install && npm run build
+./scripts/start-dev.sh --build
 ```
 
 If a check fails for an environment reason, mention that in the pull request.
