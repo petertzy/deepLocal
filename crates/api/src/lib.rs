@@ -16,7 +16,12 @@ use deeplocal_runtime::RuntimeManager;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, convert::Infallible, env, path::PathBuf, process::Command, sync::Arc,
+    collections::HashMap,
+    convert::Infallible,
+    env,
+    path::{Component, PathBuf},
+    process::Command,
+    sync::Arc,
     time::Duration,
 };
 use tokio::{io::AsyncWriteExt, sync::RwLock};
@@ -87,6 +92,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
             "/runtime/models/open-directory",
             post(open_models_directory),
         )
+        .route("/runtime/models/reveal", post(reveal_model_path))
         .route("/v1/models", get(openai_models))
         .route("/v1/chat/completions", post(chat_completions))
         .layer(CorsLayer::permissive())
@@ -109,14 +115,21 @@ async fn loaded_models(State(state): State<Arc<ApiState>>) -> Json<serde_json::V
 }
 
 async fn models(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!(state.runtime.list_models().await))
+    let models: Vec<_> = state
+        .runtime
+        .list_models()
+        .await
+        .into_iter()
+        .map(model_with_local_size)
+        .collect();
+    Json(serde_json::json!(models))
 }
 
 async fn register_model(
     State(state): State<Arc<ApiState>>,
     Json(model): Json<ModelDescriptor>,
 ) -> impl IntoResponse {
-    let model = absolutize_model_paths(model);
+    let model = model_with_local_size(absolutize_model_paths(model));
     state.runtime.register_model(model.clone()).await;
     (axum::http::StatusCode::CREATED, Json(model)).into_response()
 }
@@ -535,6 +548,55 @@ async fn open_models_directory() -> impl IntoResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RevealModelPathRequest {
+    pub path: String,
+}
+
+async fn reveal_model_path(Json(body): Json<RevealModelPathRequest>) -> impl IntoResponse {
+    let path = absolute_path(PathBuf::from(body.path));
+    let target = if path.exists() {
+        path
+    } else {
+        path.parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(models_root)
+    };
+
+    let result = if cfg!(target_os = "macos") && target.is_file() {
+        Command::new("open").arg("-R").arg(&target).status()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(&target).status()
+    } else if cfg!(target_os = "windows") && target.is_file() {
+        Command::new("explorer")
+            .arg(format!("/select,{}", target.to_string_lossy()))
+            .status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("explorer").arg(&target).status()
+    } else {
+        Command::new("xdg-open")
+            .arg(target.parent().unwrap_or(&target))
+            .status()
+    };
+
+    match result {
+        Ok(status) if status.success() => {
+            Json(serde_json::json!({ "status": "opened", "path": target.to_string_lossy() }))
+                .into_response()
+        }
+        Ok(status) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("open command exited with status {status}"),
+        )
+            .into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
+    }
+}
+
 async fn huggingface_download(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<HuggingFaceDownloadRequest>,
@@ -601,6 +663,29 @@ fn absolutize_model_paths(mut model: ModelDescriptor) -> ModelDescriptor {
     model
 }
 
+fn model_with_local_size(mut model: ModelDescriptor) -> ModelDescriptor {
+    for file in &mut model.files {
+        if file.size_bytes.is_none() {
+            file.size_bytes = file
+                .path
+                .as_deref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|metadata| metadata.len());
+        }
+    }
+
+    if model.size_bytes.is_none() {
+        model.size_bytes = model
+            .local_path
+            .as_deref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|metadata| metadata.len())
+            .or_else(|| model.files.iter().find_map(|file| file.size_bytes));
+    }
+
+    model
+}
+
 fn absolute_path_string(path: &str) -> String {
     absolute_path(PathBuf::from(path))
         .to_string_lossy()
@@ -608,12 +693,30 @@ fn absolute_path_string(path: &str) -> String {
 }
 
 fn absolute_path(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        return path;
-    }
-    env::current_dir()
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        env::current_dir()
         .map(|current| current.join(&path))
         .unwrap_or(path)
+    };
+    normalize_path(absolute)
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn huggingface_resolve_url(repo: &str, filename: &str) -> String {
