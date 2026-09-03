@@ -86,6 +86,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
         )
         .route("/runtime/huggingface/download", post(huggingface_download))
         .route("/runtime/downloads", get(downloads))
+        .route("/runtime/downloads/clear-history", post(clear_download_history))
         .route("/runtime/downloads/cancel", post(cancel_download))
         .route("/runtime/models/directory", get(models_directory))
         .route(
@@ -453,7 +454,7 @@ async fn huggingface_auth_check(
 
 #[cfg(test)]
 mod tests {
-    use super::calculate_eta_seconds;
+    use super::{calculate_eta_seconds, is_download_history};
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -473,6 +474,15 @@ mod tests {
     #[test]
     fn eta_is_zero_when_download_is_complete() {
         assert_eq!(calculate_eta_seconds(100, Some(100), Some(20.0)), Some(0));
+    }
+
+    #[test]
+    fn history_statuses_are_terminal_download_jobs() {
+        assert!(is_download_history("downloaded"));
+        assert!(is_download_history("cancelled"));
+        assert!(is_download_history("error"));
+        assert!(!is_download_history("downloading"));
+        assert!(!is_download_history("queued"));
     }
 }
 
@@ -496,6 +506,13 @@ async fn downloads(State(state): State<Arc<ApiState>>) -> Json<Vec<DownloadJob>>
     let mut downloads: Vec<_> = state.downloads.read().await.values().cloned().collect();
     downloads.sort_by(|a, b| a.id.cmp(&b.id));
     Json(downloads)
+}
+
+async fn clear_download_history(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
+    let mut downloads = state.downloads.write().await;
+    let before = downloads.len();
+    downloads.retain(|_, job| !is_download_history(&job.status));
+    Json(serde_json::json!({ "cleared": before - downloads.len() }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -907,6 +924,10 @@ fn calculate_eta_seconds(
 
 fn is_cancellable(status: &str) -> bool {
     matches!(status, "queued" | "starting" | "downloading" | "cancelling")
+}
+
+fn is_download_history(status: &str) -> bool {
+    matches!(status, "downloaded" | "cancelled" | "error")
 }
 
 async fn download_cancel_requested(

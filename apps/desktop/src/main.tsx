@@ -359,11 +359,12 @@ function Models({
 
   const downloadByFile = useMemo(() => {
     const items = new Map<string, DownloadJob>();
-    for (const job of downloads) {
+    for (const job of downloads.filter((item) => isActiveDownload(item.status))) {
       items.set(downloadKey(job.repo, job.filename), job);
     }
     return items;
   }, [downloads]);
+  const downloadHistory = useMemo(() => downloads.filter((job) => isDownloadHistory(job.status)), [downloads]);
 
   useEffect(() => {
     setPendingDownloads((current) => {
@@ -495,6 +496,17 @@ function Models({
     await onRefresh();
   }
 
+  async function clearDownloadHistory() {
+    const res = await fetch(`${API_BASE}/runtime/downloads/clear-history`, { method: "POST" });
+    if (res.ok) {
+      const data = await res.json();
+      onNotice(`Cleared ${data.cleared ?? 0} download history items.`);
+    } else {
+      onNotice("Failed to clear download history.");
+    }
+    await onRefresh();
+  }
+
   async function openModelsDirectory() {
     const res = await fetch(`${API_BASE}/runtime/models/open-directory`, { method: "POST" });
     onNotice(res.ok ? `Opened ${modelsDirectory}.` : `Failed to open ${modelsDirectory}.`);
@@ -620,6 +632,37 @@ function Models({
             );
           })}
         </div>
+      </section>
+      <section className="downloadHistory">
+        <div className="sectionTitle">
+          <h2>Download history</h2>
+          <span>{downloadHistory.length} items</span>
+        </div>
+        {downloadHistory.length ? (
+          <>
+            <div className="historyList">
+              {downloadHistory.map((job) => (
+                <div className="historyRow" key={job.id}>
+                  <div>
+                    <strong>{job.filename}</strong>
+                    <p>{job.repo}</p>
+                    {job.error && <p>{job.error}</p>}
+                  </div>
+                  <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
+                  <em>{formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}</em>
+                </div>
+              ))}
+            </div>
+            <button className="secondaryAction" onClick={clearDownloadHistory}>Clear history</button>
+          </>
+        ) : (
+          <EmptyState
+            compact
+            icon={<Download size={22} />}
+            title="No download history"
+            description="Completed, cancelled, and failed downloads will appear here."
+          />
+        )}
       </section>
       <div className="modelTools">
         <input value={id} onChange={(event) => setId(event.target.value)} />
@@ -1152,6 +1195,14 @@ function downloadActionLabel(job: DownloadJob) {
   if (job.status === "cancelling") return "Stopping";
   if (job.status === "starting") return "Starting";
   return "Stop";
+}
+
+function isActiveDownload(status: string) {
+  return ["queued", "starting", "downloading", "cancelling"].includes(status);
+}
+
+function isDownloadHistory(status: string) {
+  return ["downloaded", "cancelled", "error"].includes(status);
 }
 
 function downloadStatusLabel(status: string) {
