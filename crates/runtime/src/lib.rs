@@ -238,6 +238,73 @@ fn resolve_binary_path(binary: &PathBuf) -> Option<PathBuf> {
     })
 }
 
+fn llama_startup_error_message(wait_error: &str, stderr: Option<&[u8]>) -> String {
+    let stderr = stderr
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or("")
+        .trim();
+    let details = stderr.to_lowercase();
+
+    if details.contains("context") || details.contains("ctx") || details.contains("n_ctx") {
+        return "llama-server could not start. Try a smaller context size.".to_string();
+    }
+    if details.contains("no such file")
+        || details.contains("cannot open")
+        || details.contains("failed to open")
+        || details.contains("model")
+    {
+        return "llama-server could not open the model file. Check the model path and file."
+            .to_string();
+    }
+    if details.contains("memory") || details.contains("alloc") || details.contains("out of memory")
+    {
+        return "llama-server ran out of memory. Try fewer GPU layers or a smaller model."
+            .to_string();
+    }
+    if !stderr.is_empty() {
+        let first_line = stderr.lines().next().unwrap_or(stderr).trim();
+        return format!(
+            "llama-server could not start: {}",
+            truncate_error(first_line, 140)
+        );
+    }
+
+    format!(
+        "llama-server could not start: {}",
+        truncate_error(wait_error, 140)
+    )
+}
+
+fn truncate_error(message: &str, max_len: usize) -> String {
+    if message.len() <= max_len {
+        return message.to_string();
+    }
+    format!("{}...", &message[..max_len.saturating_sub(3)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::llama_startup_error_message;
+
+    #[test]
+    fn startup_errors_suggest_smaller_context_for_context_failures() {
+        let message = llama_startup_error_message("not ready", Some(b"invalid n_ctx value"));
+        assert!(message.contains("smaller context"));
+    }
+
+    #[test]
+    fn startup_errors_suggest_model_path_for_open_failures() {
+        let message = llama_startup_error_message("not ready", Some(b"failed to open model"));
+        assert!(message.contains("model path"));
+    }
+
+    #[test]
+    fn startup_errors_suggest_memory_adjustments_for_allocation_failures() {
+        let message = llama_startup_error_message("not ready", Some(b"out of memory"));
+        assert!(message.contains("fewer GPU layers"));
+    }
+}
+
 impl LlamaCppBackend {
     pub fn new(binary: impl Into<PathBuf>) -> Self {
         Self {
@@ -333,9 +400,11 @@ impl InferenceBackend for LlamaCppBackend {
             .local_path
             .clone()
             .or_else(|| model.files.iter().find_map(|file| file.path.clone()))
-            .ok_or_else(|| anyhow::anyhow!("model has no local path: {}", model.id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("The selected model does not have a local file path.")
+            })?;
         if !PathBuf::from(&model_path).exists() {
-            anyhow::bail!("model file does not exist: {model_path}");
+            anyhow::bail!("The model file could not be found. Check the file path and try again.");
         }
 
         self.unload(&model.id).await.ok();
@@ -359,13 +428,21 @@ impl InferenceBackend for LlamaCppBackend {
 
         let mut child = command.spawn().map_err(|error| {
             anyhow::anyhow!(
-                "failed to start llama-server at '{}': {error}. Install llama.cpp and set LLAMA_SERVER or DEEPLOCAL_LLAMA_SERVER.",
+                "llama-server could not start at '{}': {error}. Install llama.cpp or set LLAMA_SERVER / DEEPLOCAL_LLAMA_SERVER.",
                 self.binary.display()
             )
         })?;
         if let Err(error) = self.wait_until_ready(port).await {
             let _ = child.kill().await;
-            return Err(error);
+            let stderr = child
+                .wait_with_output()
+                .await
+                .ok()
+                .map(|output| output.stderr);
+            return Err(anyhow::anyhow!(llama_startup_error_message(
+                &error.to_string(),
+                stderr.as_deref()
+            )));
         }
         self.processes
             .write()
