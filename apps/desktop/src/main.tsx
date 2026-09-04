@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -292,6 +292,9 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState(() => window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) ?? "");
+  const [streaming, setStreaming] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
   const conversationModel = activeConversation?.model_id ?? activeModel;
@@ -325,13 +328,14 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
 
   async function send() {
     const prompt = input.trim();
-    if (!prompt) return;
+    if (!prompt || isGenerating) return;
     if (!conversationModel) {
       onNotice("Load a model before chatting.");
       return;
     }
 
     setInput("");
+    setIsGenerating(true);
     try {
       const conversation = activeConversation ?? (await createConversation(titleFromPrompt(prompt), conversationModel));
       selectConversation(conversation.id);
@@ -341,6 +345,50 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
       const userMessage = await appendConversationMessage(conversation.id, "user", prompt);
       const nextMessages: ChatMessage[] = [...conversation.messages, userMessage];
       updateConversationMessages(conversation.id, nextMessages, conversation.model_id ?? conversationModel);
+
+      if (streaming) {
+        const assistantDraft: ChatMessage = {
+          id: `streaming-${Date.now()}`,
+          role: "assistant",
+          content: "",
+          created_at: new Date().toISOString(),
+        };
+        updateConversationMessages(conversation.id, [...nextMessages, assistantDraft], conversation.model_id ?? conversationModel);
+
+        const controller = new AbortController();
+        abortRef.current = controller;
+        let content = "";
+        let stopped = false;
+        try {
+          await streamChatCompletion(
+            conversation.model_id ?? conversationModel,
+            nextMessages,
+            controller.signal,
+            (token) => {
+              content += token;
+              updateConversationMessages(
+                conversation.id,
+                [...nextMessages, { ...assistantDraft, content }],
+                conversation.model_id ?? conversationModel,
+              );
+            },
+          );
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") stopped = true;
+          else throw error;
+        } finally {
+          abortRef.current = null;
+        }
+
+        if (content.trim()) {
+          const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
+          updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], conversation.model_id ?? conversationModel);
+        } else {
+          updateConversationMessages(conversation.id, nextMessages, conversation.model_id ?? conversationModel);
+        }
+        onNotice(stopped ? "Chat generation stopped." : `Chat completed with ${conversation.model_id ?? conversationModel}.`);
+        return;
+      }
 
       const res = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: "POST",
@@ -356,10 +404,20 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
       const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
       updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], conversation.model_id ?? conversationModel);
       onNotice(`Chat completed with ${conversation.model_id ?? conversationModel}.`);
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") onNotice("Chat generation stopped.");
+      else {
       onNotice("Chat request failed. Start the deepLocal API and load a model.");
       refreshConversations();
+      }
+    } finally {
+      abortRef.current = null;
+      setIsGenerating(false);
     }
+  }
+
+  function stopGeneration() {
+    abortRef.current?.abort();
   }
 
   async function createConversation(title = "New conversation", modelId = activeModel ?? null) {
@@ -530,8 +588,21 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
           )}
         </div>
         <div className="composer">
+          <label className="streamToggle">
+            <input type="checkbox" checked={streaming} disabled={isGenerating} onChange={(event) => setStreaming(event.target.checked)} />
+            <span>Streaming</span>
+          </label>
           <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
-          <button disabled={!conversationModel} onClick={send}>Send</button>
+          {isGenerating ? (
+            <button onClick={stopGeneration}>
+              <Square size={16} />
+              Stop
+            </button>
+          ) : (
+            <button disabled={!conversationModel} onClick={send}>
+              Send
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1542,6 +1613,47 @@ function formatConversationTime(value: string) {
     minute: "2-digit",
   });
   return formatter.format(timestamp);
+}
+
+async function streamChatCompletion(model: string, messages: ChatMessage[], signal: AbortSignal, onToken: (token: string) => void) {
+  const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      model,
+      stream: true,
+      messages,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  if (!res.body) throw new Error("Streaming response body is not available.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+
+    for (const event of events) {
+      const data = event
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+
+      if (!data || data === "[DONE]") continue;
+      const parsed = JSON.parse(data);
+      const token = parsed.choices?.[0]?.delta?.content;
+      if (typeof token === "string") onToken(token);
+    }
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

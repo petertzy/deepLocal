@@ -908,8 +908,25 @@ progress {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr 92px;
+  grid-template-columns: auto minmax(0, 1fr) 108px;
+  align-items: center;
   gap: 10px;
+}
+
+.streamToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  color: #445057;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.streamToggle input {
+  width: 16px;
+  min-height: 16px;
+  accent-color: #2f6f62;
 }
 
 input,
