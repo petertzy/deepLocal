@@ -259,6 +259,30 @@ async fn delete_model(
             .into_response();
     }
 
+    let Some(model) = state.runtime.get_model(&body.model_id).await else {
+        return (axum::http::StatusCode::NOT_FOUND, "model not found").into_response();
+    };
+
+    if body.delete_file {
+        match model.local_path.as_deref() {
+            Some(path) if is_inside_models_root(path) => {}
+            Some(_) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "Refusing to delete a file outside the models directory.",
+                )
+                    .into_response();
+            }
+            None => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "No local file is registered for this model.",
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let Some(model) = state.runtime.remove_model(&body.model_id).await else {
         return (axum::http::StatusCode::NOT_FOUND, "model not found").into_response();
     };
@@ -557,7 +581,10 @@ async fn huggingface_auth_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_eta_seconds, is_download_history, is_gguf_header, range_header};
+    use super::{
+        calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
+        range_header,
+    };
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -602,6 +629,12 @@ mod tests {
     fn gguf_header_is_validated() {
         assert!(is_gguf_header(b"GGUF"));
         assert!(!is_gguf_header(b"HTML"));
+    }
+
+    #[test]
+    fn model_delete_paths_must_stay_inside_models_root() {
+        assert!(is_inside_models_root("./models/example/model.gguf"));
+        assert!(!is_inside_models_root("../outside/model.gguf"));
     }
 }
 
@@ -856,6 +889,12 @@ async fn huggingface_download(
 
 fn models_root() -> PathBuf {
     absolute_path(PathBuf::from("./models"))
+}
+
+fn is_inside_models_root(path: &str) -> bool {
+    let models_root = models_root();
+    let path = absolute_path(PathBuf::from(path));
+    path.starts_with(models_root)
 }
 
 fn absolutize_model_paths(mut model: ModelDescriptor) -> ModelDescriptor {
