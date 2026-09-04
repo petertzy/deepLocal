@@ -490,7 +490,8 @@ impl InferenceBackend for LlamaCppBackend {
                 "messages": messages,
                 "temperature": request.parameters.temperature,
                 "top_p": request.parameters.top_p,
-                "max_tokens": request.parameters.max_tokens
+                "max_tokens": request.parameters.max_tokens,
+                "stop": request.parameters.stop
             }))
             .send()
             .await?

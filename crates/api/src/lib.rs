@@ -664,8 +664,9 @@ async fn huggingface_auth_check(
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
-        model_id_from_filename, openai_model_data, range_header, unique_model_id,
+        OpenAiChatRequest, calculate_eta_seconds, is_download_history, is_gguf_header,
+        is_inside_models_root, model_id_from_filename, openai_model_data, range_header,
+        unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use std::collections::HashSet;
@@ -778,6 +779,57 @@ mod tests {
         assert_eq!(data[0]["object"], "model");
         assert_eq!(data[0]["created"], 0);
         assert_eq!(data[0]["status"], "loaded");
+    }
+
+    #[test]
+    fn openai_chat_request_parses_common_generation_parameters() {
+        let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "max_tokens": 128,
+            "stop": ["END", "\nUser:"],
+            "stream": true,
+            "unsupported_client_field": "ignored"
+        }))
+        .expect("parse request");
+
+        assert_eq!(request.model, "local-model");
+        assert!(request.stream);
+        assert_eq!(request.temperature, Some(0.2));
+        assert_eq!(request.top_p, Some(0.8));
+        assert_eq!(request.max_tokens, Some(128));
+        assert_eq!(request.stop, vec!["END".to_string(), "\nUser:".to_string()]);
+    }
+
+    #[test]
+    fn openai_chat_request_accepts_single_stop_sequence_and_defaults_stream() {
+        let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stop": "END"
+        }))
+        .expect("parse request");
+
+        assert!(!request.stream);
+        assert_eq!(request.stop, vec!["END".to_string()]);
+    }
+
+    #[test]
+    fn openai_chat_request_rejects_invalid_stop_sequences() {
+        let error = serde_json::from_value::<OpenAiChatRequest>(serde_json::json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stop": [42]
+        }))
+        .expect_err("invalid stop should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("stop must be a string or an array of strings")
+        );
     }
 }
 
@@ -1651,6 +1703,8 @@ pub struct OpenAiChatRequest {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_tokens: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_stop_sequences")]
+    pub stop: Vec<String>,
     pub seed: Option<u64>,
 }
 
@@ -1658,6 +1712,29 @@ pub struct OpenAiChatRequest {
 pub struct OpenAiMessage {
     pub role: String,
     pub content: String,
+}
+
+fn deserialize_stop_sequences<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::String(stop)) => Ok(vec![stop]),
+        Some(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(stop) => Ok(stop),
+                _ => Err(serde::de::Error::custom(
+                    "stop must be a string or an array of strings",
+                )),
+            })
+            .collect(),
+        Some(_) => Err(serde::de::Error::custom(
+            "stop must be a string or an array of strings",
+        )),
+    }
 }
 
 async fn chat_completions(
@@ -1685,6 +1762,7 @@ async fn chat_completions(
             temperature: body.temperature.unwrap_or(0.7),
             top_p: body.top_p.unwrap_or(0.95),
             max_tokens: body.max_tokens,
+            stop: body.stop,
             seed: body.seed,
         },
         stream: body.stream,

@@ -45,6 +45,7 @@ pub struct GenerationParameters {
     pub temperature: f32,
     pub top_p: f32,
     pub max_tokens: Option<u32>,
+    pub stop: Vec<String>,
     pub seed: Option<u64>,
 }
 
@@ -54,6 +55,7 @@ impl Default for GenerationParameters {
             temperature: 0.7,
             top_p: 0.95,
             max_tokens: Some(512),
+            stop: Vec::new(),
             seed: None,
         }
     }
