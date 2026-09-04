@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncWriteExt, BufWriter},
     sync::{Mutex, RwLock},
 };
 use tower_http::cors::CorsLayer;
@@ -556,7 +556,7 @@ async fn huggingface_auth_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_eta_seconds, is_download_history};
+    use super::{calculate_eta_seconds, is_download_history, range_header};
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -585,6 +585,16 @@ mod tests {
         assert!(is_download_history("error"));
         assert!(!is_download_history("downloading"));
         assert!(!is_download_history("queued"));
+    }
+
+    #[test]
+    fn range_header_is_omitted_for_new_downloads() {
+        assert_eq!(range_header(0), None);
+    }
+
+    #[test]
+    fn range_header_resumes_from_existing_bytes() {
+        assert_eq!(range_header(42), Some("bytes=42-".to_string()));
     }
 }
 
@@ -923,6 +933,16 @@ fn gated_repo_message(status: reqwest::StatusCode) -> String {
     )
 }
 
+fn partial_download_path(local_path: &PathBuf) -> PathBuf {
+    let mut partial = local_path.as_os_str().to_os_string();
+    partial.push(".partial");
+    PathBuf::from(partial)
+}
+
+fn range_header(resume_from: u64) -> Option<String> {
+    (resume_from > 0).then(|| format!("bytes={resume_from}-"))
+}
+
 async fn download_huggingface_file(
     downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     storage: Arc<Mutex<Storage>>,
@@ -932,10 +952,17 @@ async fn download_huggingface_file(
     local_dir: PathBuf,
     local_path: PathBuf,
 ) -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(&local_dir).await?;
+    let partial_path = partial_download_path(&local_path);
+    let resume_from = tokio::fs::metadata(&partial_path)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     {
         let mut jobs = downloads.write().await;
         if let Some(job) = jobs.get_mut(&job_id) {
             job.status = "downloading".to_string();
+            job.downloaded_bytes = resume_from;
             job.updated_at = Utc::now();
             let job = job.clone();
             drop(jobs);
@@ -947,28 +974,49 @@ async fn download_huggingface_file(
         return Ok(());
     }
 
-    tokio::fs::create_dir_all(&local_dir).await?;
     let url = huggingface_resolve_url(&body.repo, &body.filename);
     let client = reqwest::Client::new();
-    let response = apply_huggingface_auth(client.get(url), body.token.as_deref())
-        .send()
-        .await?;
+    let mut request = apply_huggingface_auth(client.get(url), body.token.as_deref());
+    if let Some(header) = range_header(resume_from) {
+        request = request.header(reqwest::header::RANGE, header);
+    }
+    let response = request.send().await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED
         || response.status() == reqwest::StatusCode::FORBIDDEN
     {
         anyhow::bail!("{}", gated_repo_message(response.status()));
     }
+    let resumes_partial =
+        resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     let response = response.error_for_status()?;
-    let total = response.content_length().or(body.size_bytes);
+    let downloaded_start = if resume_from > 0 && !resumes_partial {
+        tokio::fs::remove_file(&partial_path).await.ok();
+        0
+    } else {
+        resume_from
+    };
+    let total = response
+        .content_length()
+        .map(|length| length + downloaded_start)
+        .or(body.size_bytes);
     if download_cancel_requested(&downloads, &job_id).await {
         mark_download_cancelled(&downloads, &storage, &job_id, &local_path).await;
         return Ok(());
     }
     let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(&local_path).await?;
-    let mut downloaded = 0_u64;
+    let file = if downloaded_start > 0 {
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&partial_path)
+            .await?
+    } else {
+        tokio::fs::File::create(&partial_path).await?
+    };
+    let mut file = BufWriter::new(file);
+    let mut downloaded = downloaded_start;
     let mut last_sample_at = Instant::now();
-    let mut last_sample_bytes = 0_u64;
+    let mut last_sample_bytes = downloaded_start;
 
     while let Some(chunk) = stream.next().await {
         if download_cancel_requested(&downloads, &job_id).await {
@@ -999,6 +1047,17 @@ async fn download_huggingface_file(
         }
     }
     file.flush().await?;
+    drop(file);
+
+    if let Some(expected_size) = total {
+        if downloaded != expected_size {
+            anyhow::bail!(
+                "downloaded file size mismatch: expected {expected_size} bytes, got {downloaded}"
+            );
+        }
+    }
+
+    tokio::fs::rename(&partial_path, &local_path).await?;
 
     let model_id = body
         .model_id
@@ -1061,9 +1120,8 @@ async fn mark_download_cancelled(
     downloads: &Arc<RwLock<HashMap<String, DownloadJob>>>,
     storage: &Arc<Mutex<Storage>>,
     job_id: &str,
-    local_path: &PathBuf,
+    _local_path: &PathBuf,
 ) {
-    let _ = tokio::fs::remove_file(local_path).await;
     let mut jobs = downloads.write().await;
     if let Some(job) = jobs.get_mut(job_id) {
         job.status = "cancelled".to_string();
