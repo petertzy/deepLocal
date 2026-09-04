@@ -57,9 +57,10 @@ async fn main() -> anyhow::Result<()> {
                 .await;
             register_local_gguf_models(&runtime, &config.models.directory).await?;
 
-            let app = deeplocal_api::router(runtime);
             let host = host.unwrap_or(config.server.host);
             let port = port.unwrap_or(config.server.port);
+            warn_if_public_bind(&host);
+            let app = deeplocal_api::router_with_cors(runtime, config.server.enable_cors);
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
             let listener = tokio::net::TcpListener::bind(addr).await?;
             println!("deepLocal API listening on http://{addr}");
@@ -94,6 +95,14 @@ async fn register_local_gguf_models(
             .await;
     }
     Ok(())
+}
+
+fn warn_if_public_bind(host: &str) {
+    if matches!(host, "0.0.0.0" | "::" | "[::]") {
+        eprintln!(
+            "WARNING: deepLocal is binding to {host}. Devices on your network may be able to access loaded models and local API responses. Use 127.0.0.1 unless you intentionally need LAN access."
+        );
+    }
 }
 
 fn collect_gguf_files(directory: &PathBuf) -> anyhow::Result<Vec<PathBuf>> {

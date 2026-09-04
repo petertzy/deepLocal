@@ -78,9 +78,13 @@ pub struct ApiState {
 }
 
 pub fn router(runtime: RuntimeManager) -> Router {
+    router_with_cors(runtime, true)
+}
+
+pub fn router_with_cors(runtime: RuntimeManager, enable_cors: bool) -> Router {
     let storage = open_default_storage();
     let restored_downloads = restore_download_jobs(&storage);
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/runtime/hardware", get(hardware))
         .route("/runtime/backends", get(backends))
@@ -128,12 +132,17 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .route("/runtime/models/reveal", post(reveal_model_path))
         .route("/v1/models", get(openai_models))
         .route("/v1/chat/completions", post(chat_completions))
-        .layer(CorsLayer::permissive())
         .with_state(Arc::new(ApiState {
             runtime,
             downloads: Arc::new(RwLock::new(restored_downloads)),
             storage: Arc::new(Mutex::new(storage)),
-        }))
+        }));
+
+    if enable_cors {
+        router.layer(CorsLayer::permissive())
+    } else {
+        router
+    }
 }
 
 async fn health() -> Json<serde_json::Value> {

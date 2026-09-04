@@ -60,6 +60,31 @@ Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
 
 If `llama-server` is already available in `PATH`, deepLocal uses it directly.
 
+## Network Access
+
+deepLocal binds the API to `127.0.0.1` by default, so only local apps on the same
+computer can call it.
+
+Advanced users can opt in to LAN access with either a CLI flag:
+
+```bash
+cargo run -p deeplocal -- serve --host 0.0.0.0
+```
+
+or a config file:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 14567
+enable_cors = true
+```
+
+Binding to `0.0.0.0` exposes the API to other devices that can reach your
+machine. Those clients may send prompts to loaded models and read local model
+responses. Only enable it on trusted networks, and prefer `127.0.0.1` for normal
+desktop use. deepLocal prints a warning when public binding is enabled.
+
 ## Local API
 
 Base URL:
