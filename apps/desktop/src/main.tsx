@@ -430,7 +430,10 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
                 onClick={() => selectConversation(conversation.id)}
               >
                 <span>{conversation.title}</span>
-                <small>{conversation.model_id ?? "No model yet"}</small>
+                <em>{conversationPreview(conversation)}</em>
+                <small>
+                  {formatConversationTime(conversation.updated_at)} · {conversation.model_id ?? "No model yet"}
+                </small>
               </button>
             ))
           ) : (
@@ -440,17 +443,22 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
       </aside>
 
       <div className="chat">
-        <div className="chatMeta">
-          <Boxes size={18} />
-          <span className="activeModel" title={conversationModel ?? "No model loaded"}>
-            Model: {conversationModel ?? "No model loaded"}
-          </span>
-          <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && renameConversation(activeConversation)}>
-            <Pencil size={16} />
-          </button>
-          <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && deleteConversation(activeConversation)}>
-            <Trash2 size={16} />
-          </button>
+        <div className="chatHeader">
+          <div className="chatTitle">
+            <h2>{activeConversation?.title ?? "Chat"}</h2>
+            <span title={conversationModel ?? "No model loaded"}>
+              <Boxes size={16} />
+              {conversationModel ?? "No model loaded"}
+            </span>
+          </div>
+          <div className="chatActions">
+            <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && renameConversation(activeConversation)}>
+              <Pencil size={16} />
+            </button>
+            <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && deleteConversation(activeConversation)}>
+              <Trash2 size={16} />
+            </button>
+          </div>
         </div>
         <div className="transcript">
           {!messages.length && !conversationModel ? (
@@ -1514,6 +1522,26 @@ function isMarkdownTable(content: string) {
 function titleFromPrompt(prompt: string) {
   const title = prompt.replace(/\s+/g, " ").trim();
   return title.length > 44 ? `${title.slice(0, 41)}...` : title || "New conversation";
+}
+
+function conversationPreview(conversation: ChatConversation) {
+  const lastMessage = conversation.messages.at(-1);
+  if (!lastMessage) return "No messages yet";
+  const preview = lastMessage.content.replace(/\s+/g, " ").trim();
+  return preview.length > 58 ? `${preview.slice(0, 55)}...` : preview;
+}
+
+function formatConversationTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return "Saved";
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return formatter.format(timestamp);
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
