@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    io::{AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     sync::{Mutex, RwLock},
 };
 use tower_http::cors::CorsLayer;
@@ -557,7 +557,7 @@ async fn huggingface_auth_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_eta_seconds, is_download_history, range_header};
+    use super::{calculate_eta_seconds, is_download_history, is_gguf_header, range_header};
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -596,6 +596,12 @@ mod tests {
     #[test]
     fn range_header_resumes_from_existing_bytes() {
         assert_eq!(range_header(42), Some("bytes=42-".to_string()));
+    }
+
+    #[test]
+    fn gguf_header_is_validated() {
+        assert!(is_gguf_header(b"GGUF"));
+        assert!(!is_gguf_header(b"HTML"));
     }
 }
 
@@ -985,6 +991,40 @@ fn range_header(resume_from: u64) -> Option<String> {
     (resume_from > 0).then(|| format!("bytes={resume_from}-"))
 }
 
+async fn validate_downloaded_gguf(
+    path: &PathBuf,
+    expected_size: Option<u64>,
+) -> anyhow::Result<()> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| anyhow::anyhow!("downloaded file is missing: {error}"))?;
+    let actual_size = metadata.len();
+    if actual_size == 0 {
+        anyhow::bail!("downloaded file is empty");
+    }
+    if let Some(expected_size) = expected_size {
+        if actual_size != expected_size {
+            anyhow::bail!(
+                "downloaded file size mismatch: expected {expected_size} bytes, got {actual_size}"
+            );
+        }
+    }
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut header = [0_u8; 4];
+    file.read_exact(&mut header).await.map_err(|error| {
+        anyhow::anyhow!("downloaded file is too small for a GGUF header: {error}")
+    })?;
+    if !is_gguf_header(&header) {
+        anyhow::bail!("downloaded file is not a GGUF file");
+    }
+    Ok(())
+}
+
+fn is_gguf_header(header: &[u8; 4]) -> bool {
+    header == b"GGUF"
+}
+
 async fn download_huggingface_file(
     downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     storage: Arc<Mutex<Storage>>,
@@ -1100,6 +1140,7 @@ async fn download_huggingface_file(
     }
 
     tokio::fs::rename(&partial_path, &local_path).await?;
+    validate_downloaded_gguf(&local_path, total).await?;
 
     let model_id = body
         .model_id
