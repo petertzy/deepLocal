@@ -297,6 +297,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   const [streaming, setStreaming] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
   const conversationModel = activeConversation?.model_id ?? activeModel;
@@ -322,6 +323,11 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   useEffect(() => {
     refreshConversations();
   }, [refreshConversations]);
+
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [activeConversationId, messages.length, messages.at(-1)?.content]);
 
   function selectConversation(id: string) {
     setActiveConversationId(id);
@@ -529,7 +535,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
             </button>
           </div>
         </div>
-        <div className="transcript">
+        <div className="transcript" ref={transcriptRef}>
           {!messages.length && !conversationModel ? (
             <EmptyState
               icon={<MessageSquare size={24} />}

@@ -691,6 +691,8 @@ progress {
 .chatLayout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  height: calc(100vh - 126px);
+  min-height: 520px;
   padding: 0;
   overflow: hidden;
 }
@@ -700,7 +702,7 @@ progress {
   grid-template-rows: auto 1fr;
   gap: 10px;
   min-width: 0;
-  min-height: 520px;
+  min-height: 0;
   padding: 18px;
   background: #fbfcfc;
 }
@@ -771,7 +773,8 @@ progress {
   grid-template-rows: auto 1fr auto;
   gap: 10px;
   min-width: 0;
-  min-height: 520px;
+  min-height: 0;
+  height: 100%;
   padding: 14px 18px 18px;
 }
 
@@ -821,6 +824,7 @@ progress {
   display: grid;
   align-content: start;
   gap: 12px;
+  min-height: 0;
   overflow: auto;
   padding: 10px 4px 6px;
 }
@@ -927,6 +931,9 @@ progress {
   grid-template-columns: auto minmax(0, 1fr) 108px;
   align-items: center;
   gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #edf0f1;
+  background: #ffffff;
 }
 
 .streamToggle {
