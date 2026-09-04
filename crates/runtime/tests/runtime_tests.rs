@@ -1,9 +1,14 @@
 use deeplocal_core::{
-    ChatMessage, ChatRole, GenerationParameters, GenerationRequest, LoadOptions, ModelDescriptor,
+    ChatMessage, ChatRole, GenerationParameters, GenerationRequest, InferenceBackend, LoadOptions,
+    ModelDescriptor,
 };
 use deeplocal_runtime::{LlamaCppBackend, MockBackend, RuntimeManager};
 use futures::StreamExt;
-use std::sync::Arc;
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[tokio::test]
 async fn mock_backend_streams_tokens_for_loaded_model() {
@@ -85,4 +90,36 @@ async fn reports_backend_statuses() {
             .unwrap_or_default()
             .contains("llama-server")
     );
+}
+
+#[tokio::test]
+async fn failed_llama_load_does_not_leave_process_table_entry() {
+    let binary = if PathBuf::from("/usr/bin/false").exists() {
+        "/usr/bin/false"
+    } else {
+        "/bin/false"
+    };
+    let model_path = std::env::temp_dir().join(format!(
+        "deeplocal-runtime-test-{}.gguf",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    std::fs::write(&model_path, b"GGUF").expect("write model placeholder");
+    let backend = LlamaCppBackend::new_for_tests(binary, 1);
+
+    let result = backend
+        .load(
+            ModelDescriptor::local_gguf("failed-load", model_path.to_string_lossy().to_string()),
+            LoadOptions {
+                context_length: None,
+                gpu_layers: None,
+            },
+        )
+        .await;
+
+    let _ = std::fs::remove_file(model_path);
+    assert!(result.is_err());
+    assert_eq!(backend.process_count().await, 0);
 }

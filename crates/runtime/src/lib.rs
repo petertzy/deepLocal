@@ -216,6 +216,8 @@ impl InferenceBackend for MockBackend {
 pub struct LlamaCppBackend {
     binary: PathBuf,
     next_port: AtomicU16,
+    ready_attempts: usize,
+    ready_interval: Duration,
     processes: RwLock<HashMap<String, LlamaProcess>>,
 }
 
@@ -241,8 +243,24 @@ impl LlamaCppBackend {
         Self {
             binary: binary.into(),
             next_port: AtomicU16::new(18080),
+            ready_attempts: 120,
+            ready_interval: Duration::from_millis(500),
             processes: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn new_for_tests(binary: impl Into<PathBuf>, ready_attempts: usize) -> Self {
+        Self {
+            binary: binary.into(),
+            next_port: AtomicU16::new(18080),
+            ready_attempts,
+            ready_interval: Duration::from_millis(1),
+            processes: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub async fn process_count(&self) -> usize {
+        self.processes.read().await.len()
     }
 
     pub fn from_env() -> Self {
@@ -256,15 +274,23 @@ impl LlamaCppBackend {
     async fn wait_until_ready(&self, port: u16) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         let url = format!("http://127.0.0.1:{port}/health");
-        for _ in 0..120 {
+        for _ in 0..self.ready_attempts {
             if let Ok(response) = client.get(&url).send().await {
                 if response.status().is_success() {
                     return Ok(());
                 }
             }
-            sleep(Duration::from_millis(500)).await;
+            sleep(self.ready_interval).await;
         }
         anyhow::bail!("llama-server did not become ready on port {port}");
+    }
+}
+
+impl Drop for LlamaCppBackend {
+    fn drop(&mut self) {
+        for (_, mut process) in self.processes.get_mut().drain() {
+            let _ = process.child.start_kill();
+        }
     }
 }
 
@@ -331,13 +357,16 @@ impl InferenceBackend for LlamaCppBackend {
             command.arg("--n-gpu-layers").arg(gpu_layers.to_string());
         }
 
-        let child = command.spawn().map_err(|error| {
+        let mut child = command.spawn().map_err(|error| {
             anyhow::anyhow!(
                 "failed to start llama-server at '{}': {error}. Install llama.cpp and set LLAMA_SERVER or DEEPLOCAL_LLAMA_SERVER.",
                 self.binary.display()
             )
         })?;
-        self.wait_until_ready(port).await?;
+        if let Err(error) = self.wait_until_ready(port).await {
+            let _ = child.kill().await;
+            return Err(error);
+        }
         self.processes
             .write()
             .await
