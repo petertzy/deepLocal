@@ -99,35 +99,6 @@ You can paste the token in the Settings page or set `HF_TOKEN` /
 `HUGGINGFACE_TOKEN` before starting the backend. Tokens are not stored in this
 repository.
 
-### 401 Unauthorized
-
-A 401 usually means Hugging Face rejected the token before checking model
-access. Common fixes:
-
-- Create a fresh Hugging Face token if the old one was revoked or expired.
-- Make sure the token has read permissions.
-- Paste only the token value, with no extra spaces or quotes.
-- If using an environment variable, restart deepLocal after changing it.
-
-Use the Settings page token check before retrying a download.
-
-### 403 Forbidden On Gated Repositories
-
-A 403 usually means the token is valid, but the account does not have access to
-that exact model repository.
-
-For gated repositories such as official Gemma releases:
-
-- Log in to Hugging Face in the browser.
-- Open the exact repository you want to download from.
-- Accept that repository's license or access terms.
-- Use a token from the same account.
-- Make sure the token has read access to public gated repositories.
-
-Accepting a related model license is not always enough. Hugging Face can gate
-each repository separately, so the account must be approved for the exact repo
-shown in the download URL.
-
 ## Project Layout
 
 ```text
