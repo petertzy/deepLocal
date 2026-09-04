@@ -10,7 +10,8 @@ use axum::{
 };
 use chrono::Utc;
 use deeplocal_core::{
-    ChatMessage, ChatRole, GenerationParameters, GenerationRequest, LoadOptions, ModelDescriptor,
+    ChatMessage, ChatRole, DownloadJob, GenerationParameters, GenerationRequest, LoadOptions,
+    ModelDescriptor,
 };
 use deeplocal_runtime::RuntimeManager;
 use deeplocal_storage::Storage;
@@ -77,6 +78,8 @@ pub struct ApiState {
 }
 
 pub fn router(runtime: RuntimeManager) -> Router {
+    let storage = open_default_storage();
+    let restored_downloads = restore_download_jobs(&storage);
     Router::new()
         .route("/health", get(health))
         .route("/runtime/hardware", get(hardware))
@@ -92,7 +95,10 @@ pub fn router(runtime: RuntimeManager) -> Router {
         )
         .route("/runtime/huggingface/download", post(huggingface_download))
         .route("/runtime/downloads", get(downloads))
-        .route("/runtime/downloads/clear-history", post(clear_download_history))
+        .route(
+            "/runtime/downloads/clear-history",
+            post(clear_download_history),
+        )
         .route("/runtime/downloads/cancel", post(cancel_download))
         .route(
             "/runtime/chat/conversations",
@@ -122,8 +128,8 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .layer(CorsLayer::permissive())
         .with_state(Arc::new(ApiState {
             runtime,
-            downloads: Arc::new(RwLock::new(HashMap::new())),
-            storage: Arc::new(Mutex::new(open_default_storage())),
+            downloads: Arc::new(RwLock::new(restored_downloads)),
+            storage: Arc::new(Mutex::new(storage)),
         }))
 }
 
@@ -135,6 +141,24 @@ fn open_default_storage() -> Storage {
     Storage::open("deeplocal.sqlite3")
         .or_else(|_| Storage::open_memory())
         .expect("open chat storage")
+}
+
+fn restore_download_jobs(storage: &Storage) -> HashMap<String, DownloadJob> {
+    storage
+        .list_recent_download_jobs(100)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut job| {
+            if is_cancellable(&job.status) {
+                job.status = "error".to_string();
+                job.error = Some("Download interrupted by application restart.".to_string());
+                job.cancel_requested = false;
+                job.updated_at = Utc::now();
+                let _ = storage.upsert_download_job(&job);
+            }
+            (job.id.clone(), job)
+        })
+        .collect()
 }
 
 async fn hardware() -> Json<serde_json::Value> {
@@ -564,22 +588,6 @@ mod tests {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DownloadJob {
-    pub id: String,
-    pub repo: String,
-    pub filename: String,
-    pub status: String,
-    pub downloaded_bytes: u64,
-    pub total_bytes: Option<u64>,
-    pub speed_bytes_per_sec: Option<f64>,
-    pub eta_seconds: Option<u64>,
-    pub local_path: Option<String>,
-    pub error: Option<String>,
-    #[serde(default)]
-    pub cancel_requested: bool,
-}
-
 async fn downloads(State(state): State<Arc<ApiState>>) -> Json<Vec<DownloadJob>> {
     let mut downloads: Vec<_> = state.downloads.read().await.values().cloned().collect();
     downloads.sort_by(|a, b| a.id.cmp(&b.id));
@@ -590,7 +598,12 @@ async fn clear_download_history(State(state): State<Arc<ApiState>>) -> Json<serd
     let mut downloads = state.downloads.write().await;
     let before = downloads.len();
     downloads.retain(|_, job| !is_download_history(&job.status));
-    Json(serde_json::json!({ "cleared": before - downloads.len() }))
+    let cleared = before - downloads.len();
+    drop(downloads);
+
+    let storage = state.storage.lock().await;
+    let _ = storage.delete_download_jobs_by_statuses(&["downloaded", "cancelled", "error"]);
+    Json(serde_json::json!({ "cleared": cleared }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -618,7 +631,11 @@ async fn cancel_download(
         Some(job) if is_cancellable(&job.status) => {
             job.cancel_requested = true;
             job.status = "cancelling".to_string();
-            Json(job.clone()).into_response()
+            job.updated_at = Utc::now();
+            let job = job.clone();
+            drop(jobs);
+            persist_download_job(&state.storage, &job).await;
+            Json(job).into_response()
         }
         Some(job) => (
             axum::http::StatusCode::BAD_REQUEST,
@@ -680,9 +697,7 @@ async fn reveal_model_path(Json(body): Json<RevealModelPathRequest>) -> impl Int
     let target = if path.exists() {
         path
     } else {
-        path.parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(models_root)
+        path.parent().map(PathBuf::from).unwrap_or_else(models_root)
     };
 
     let result = if cfg!(target_os = "macos") && target.is_file() {
@@ -728,6 +743,7 @@ async fn huggingface_download(
     let local_dir = models_root().join(safe_repo);
     let local_path = local_dir.join(&body.filename);
     let token = normalized_token(body.token.clone()).or_else(env_huggingface_token);
+    let now = Utc::now();
     let job = DownloadJob {
         id: job_id.clone(),
         repo: body.repo.clone(),
@@ -740,18 +756,23 @@ async fn huggingface_download(
         local_path: Some(local_path.to_string_lossy().to_string()),
         error: None,
         cancel_requested: false,
+        created_at: now,
+        updated_at: now,
     };
     state
         .downloads
         .write()
         .await
         .insert(job_id.clone(), job.clone());
+    persist_download_job(&state.storage, &job).await;
 
     let downloads = state.downloads.clone();
     let runtime = state.runtime.clone();
+    let storage = state.storage.clone();
     tokio::spawn(async move {
         if let Err(error) = download_huggingface_file(
             downloads.clone(),
+            storage.clone(),
             runtime,
             job_id.clone(),
             HuggingFaceDownloadRequest { token, ..body },
@@ -764,6 +785,10 @@ async fn huggingface_download(
             if let Some(job) = jobs.get_mut(&job_id) {
                 job.status = "error".to_string();
                 job.error = Some(error.to_string());
+                job.updated_at = Utc::now();
+                let job = job.clone();
+                drop(jobs);
+                persist_download_job(&storage, &job).await;
             }
         }
     });
@@ -821,8 +846,8 @@ fn absolute_path(path: PathBuf) -> PathBuf {
         path
     } else {
         env::current_dir()
-        .map(|current| current.join(&path))
-        .unwrap_or(path)
+            .map(|current| current.join(&path))
+            .unwrap_or(path)
     };
     normalize_path(absolute)
 }
@@ -900,6 +925,7 @@ fn gated_repo_message(status: reqwest::StatusCode) -> String {
 
 async fn download_huggingface_file(
     downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
+    storage: Arc<Mutex<Storage>>,
     runtime: RuntimeManager,
     job_id: String,
     body: HuggingFaceDownloadRequest,
@@ -910,10 +936,14 @@ async fn download_huggingface_file(
         let mut jobs = downloads.write().await;
         if let Some(job) = jobs.get_mut(&job_id) {
             job.status = "downloading".to_string();
+            job.updated_at = Utc::now();
+            let job = job.clone();
+            drop(jobs);
+            persist_download_job(&storage, &job).await;
         }
     }
     if download_cancel_requested(&downloads, &job_id).await {
-        mark_download_cancelled(&downloads, &job_id, &local_path).await;
+        mark_download_cancelled(&downloads, &storage, &job_id, &local_path).await;
         return Ok(());
     }
 
@@ -931,7 +961,7 @@ async fn download_huggingface_file(
     let response = response.error_for_status()?;
     let total = response.content_length().or(body.size_bytes);
     if download_cancel_requested(&downloads, &job_id).await {
-        mark_download_cancelled(&downloads, &job_id, &local_path).await;
+        mark_download_cancelled(&downloads, &storage, &job_id, &local_path).await;
         return Ok(());
     }
     let mut stream = response.bytes_stream();
@@ -943,7 +973,7 @@ async fn download_huggingface_file(
     while let Some(chunk) = stream.next().await {
         if download_cancel_requested(&downloads, &job_id).await {
             drop(file);
-            mark_download_cancelled(&downloads, &job_id, &local_path).await;
+            mark_download_cancelled(&downloads, &storage, &job_id, &local_path).await;
             return Ok(());
         }
         let chunk = chunk?;
@@ -962,6 +992,10 @@ async fn download_huggingface_file(
             job.total_bytes = total;
             job.speed_bytes_per_sec = speed;
             job.eta_seconds = calculate_eta_seconds(downloaded, total, speed);
+            job.updated_at = Utc::now();
+            let job = job.clone();
+            drop(jobs);
+            persist_download_job(&storage, &job).await;
         }
     }
     file.flush().await?;
@@ -983,6 +1017,10 @@ async fn download_huggingface_file(
         job.total_bytes = total;
         job.speed_bytes_per_sec = None;
         job.eta_seconds = Some(0);
+        job.updated_at = Utc::now();
+        let job = job.clone();
+        drop(jobs);
+        persist_download_job(&storage, &job).await;
     }
     Ok(())
 }
@@ -1021,6 +1059,7 @@ async fn download_cancel_requested(
 
 async fn mark_download_cancelled(
     downloads: &Arc<RwLock<HashMap<String, DownloadJob>>>,
+    storage: &Arc<Mutex<Storage>>,
     job_id: &str,
     local_path: &PathBuf,
 ) {
@@ -1029,7 +1068,17 @@ async fn mark_download_cancelled(
     if let Some(job) = jobs.get_mut(job_id) {
         job.status = "cancelled".to_string();
         job.error = None;
+        job.cancel_requested = false;
+        job.updated_at = Utc::now();
+        let job = job.clone();
+        drop(jobs);
+        persist_download_job(storage, &job).await;
     }
+}
+
+async fn persist_download_job(storage: &Arc<Mutex<Storage>>, job: &DownloadJob) {
+    let storage = storage.lock().await;
+    let _ = storage.upsert_download_job(job);
 }
 
 async fn openai_models(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
@@ -1054,9 +1103,11 @@ async fn chat_conversations(State(state): State<Arc<ApiState>>) -> impl IntoResp
     let storage = state.storage.lock().await;
     match storage.list_chat_sessions() {
         Ok(sessions) => Json(sessions).into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -1078,9 +1129,11 @@ async fn create_chat_conversation(
     let storage = state.storage.lock().await;
     match storage.create_chat_session(title, body.model_id) {
         Ok(session) => (axum::http::StatusCode::CREATED, Json(session)).into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -1102,9 +1155,11 @@ async fn rename_chat_conversation(
     let storage = state.storage.lock().await;
     match storage.rename_chat_session(body.id, title) {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -1120,9 +1175,11 @@ async fn delete_chat_conversation(
     let storage = state.storage.lock().await;
     match storage.delete_chat_session(body.id) {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -1139,9 +1196,11 @@ async fn update_chat_conversation_model(
     let storage = state.storage.lock().await;
     match storage.update_chat_session_model(body.id, body.model_id) {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -1163,9 +1222,11 @@ async fn append_chat_message(
     let storage = state.storage.lock().await;
     match storage.append_chat_message(body.session_id, body.role, body.content) {
         Ok(message) => (axum::http::StatusCode::CREATED, Json(message)).into_response(),
-        Err(error) => {
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
-        }
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 

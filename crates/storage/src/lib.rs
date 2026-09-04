@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use deeplocal_core::{ChatMessage, ChatRole, ChatSession, GenerationParameters, ModelDescriptor};
+use deeplocal_core::{
+    ChatMessage, ChatRole, ChatSession, DownloadJob, GenerationParameters, ModelDescriptor,
+};
 use rusqlite::{Connection, params};
 use std::path::Path;
 use uuid::Uuid;
@@ -54,6 +56,21 @@ impl Storage {
                 hardware_fingerprint text not null,
                 metrics_json text not null,
                 created_at text not null
+            );
+            create table if not exists download_jobs (
+                id text primary key,
+                repo text not null,
+                filename text not null,
+                status text not null,
+                downloaded_bytes integer not null,
+                total_bytes integer,
+                speed_bytes_per_sec real,
+                eta_seconds integer,
+                local_path text,
+                error text,
+                cancel_requested integer not null,
+                created_at text not null,
+                updated_at text not null
             );
             ",
         )?;
@@ -233,6 +250,85 @@ impl Storage {
             messages.push(row?);
         }
         Ok(messages)
+    }
+
+    pub fn upsert_download_job(&self, job: &DownloadJob) -> anyhow::Result<()> {
+        self.conn.execute(
+            "insert into download_jobs (
+                id, repo, filename, status, downloaded_bytes, total_bytes, speed_bytes_per_sec,
+                eta_seconds, local_path, error, cancel_requested, created_at, updated_at
+             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             on conflict(id) do update set
+                repo = excluded.repo,
+                filename = excluded.filename,
+                status = excluded.status,
+                downloaded_bytes = excluded.downloaded_bytes,
+                total_bytes = excluded.total_bytes,
+                speed_bytes_per_sec = excluded.speed_bytes_per_sec,
+                eta_seconds = excluded.eta_seconds,
+                local_path = excluded.local_path,
+                error = excluded.error,
+                cancel_requested = excluded.cancel_requested,
+                updated_at = excluded.updated_at",
+            params![
+                job.id,
+                job.repo,
+                job.filename,
+                job.status,
+                job.downloaded_bytes,
+                job.total_bytes,
+                job.speed_bytes_per_sec,
+                job.eta_seconds,
+                job.local_path,
+                job.error,
+                job.cancel_requested,
+                job.created_at.to_rfc3339(),
+                job.updated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_recent_download_jobs(&self, limit: usize) -> anyhow::Result<Vec<DownloadJob>> {
+        let mut stmt = self.conn.prepare(
+            "select id, repo, filename, status, downloaded_bytes, total_bytes, speed_bytes_per_sec,
+                    eta_seconds, local_path, error, cancel_requested, created_at, updated_at
+             from download_jobs order by updated_at desc limit ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(DownloadJob {
+                id: row.get(0)?,
+                repo: row.get(1)?,
+                filename: row.get(2)?,
+                status: row.get(3)?,
+                downloaded_bytes: row.get(4)?,
+                total_bytes: row.get(5)?,
+                speed_bytes_per_sec: row.get(6)?,
+                eta_seconds: row.get(7)?,
+                local_path: row.get(8)?,
+                error: row.get(9)?,
+                cancel_requested: row.get::<_, bool>(10)?,
+                created_at: parse_datetime(row.get::<_, String>(11)?)?,
+                updated_at: parse_datetime(row.get::<_, String>(12)?)?,
+            })
+        })?;
+
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(row?);
+        }
+        Ok(jobs)
+    }
+
+    pub fn delete_download_jobs_by_statuses(&self, statuses: &[&str]) -> anyhow::Result<usize> {
+        let mut deleted = 0;
+        for status in statuses {
+            deleted += self.conn.execute(
+                "delete from download_jobs where status = ?1",
+                params![status],
+            )?;
+        }
+        Ok(deleted)
     }
 }
 

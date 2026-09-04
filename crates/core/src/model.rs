@@ -45,6 +45,24 @@ pub struct ModelDescriptor {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadJob {
+    pub id: String,
+    pub repo: String,
+    pub filename: String,
+    pub status: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub speed_bytes_per_sec: Option<f64>,
+    pub eta_seconds: Option<u64>,
+    pub local_path: Option<String>,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub cancel_requested: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 impl ModelDescriptor {
     pub fn local_gguf(id: impl Into<String>, path: impl Into<String>) -> Self {
         let id = id.into();

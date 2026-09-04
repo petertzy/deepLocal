@@ -49,10 +49,7 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::to_string_pretty(&deeplocal_hardware::detect_hardware())?
             );
         }
-        Command::Serve {
-            host,
-            port,
-        } => {
+        Command::Serve { host, port } => {
             let runtime = RuntimeManager::default();
             runtime.register_backend(Arc::new(MockBackend)).await;
             runtime
