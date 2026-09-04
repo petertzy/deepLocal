@@ -11,7 +11,7 @@ use axum::{
 use chrono::Utc;
 use deeplocal_core::{
     ChatMessage, ChatRole, DownloadJob, GenerationParameters, GenerationRequest, LoadOptions,
-    ModelDescriptor,
+    LoadedModelStatus, ModelDescriptor, ModelHandle,
 };
 use deeplocal_runtime::RuntimeManager;
 use deeplocal_storage::Storage;
@@ -220,8 +220,10 @@ async fn rescan_models(State(state): State<Arc<ApiState>>) -> impl IntoResponse 
         .filter_map(|model| model.local_path.as_deref())
         .map(absolute_path_string)
         .collect();
-    let mut used_ids: std::collections::HashSet<_> =
-        registered_models.iter().map(|model| model.id.clone()).collect();
+    let mut used_ids: std::collections::HashSet<_> = registered_models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect();
     let root = models_root();
     let mut discovered = Vec::new();
 
@@ -663,8 +665,9 @@ async fn huggingface_auth_check(
 mod tests {
     use super::{
         calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
-        model_id_from_filename, range_header, unique_model_id,
+        model_id_from_filename, openai_model_data, range_header, unique_model_id,
     };
+    use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use std::collections::HashSet;
 
     #[test]
@@ -720,7 +723,10 @@ mod tests {
 
     #[test]
     fn model_ids_are_derived_from_gguf_filenames() {
-        assert_eq!(model_id_from_filename("gemma 3 1b.Q4_K_M.gguf"), "gemma-3-1b.Q4_K_M");
+        assert_eq!(
+            model_id_from_filename("gemma 3 1b.Q4_K_M.gguf"),
+            "gemma-3-1b.Q4_K_M"
+        );
         assert_eq!(model_id_from_filename("!!!.gguf"), "local-model");
     }
 
@@ -729,6 +735,49 @@ mod tests {
         let mut used = HashSet::from(["gemma".to_string(), "gemma-2".to_string()]);
         assert_eq!(unique_model_id("gemma", &mut used), "gemma-3");
         assert!(used.contains("gemma-3"));
+    }
+
+    #[test]
+    fn openai_models_include_available_and_loaded_models() {
+        let available = vec![
+            ModelDescriptor::local_gguf("available-model", "available.gguf"),
+            ModelDescriptor::local_gguf("loaded-model", "loaded.gguf"),
+        ];
+        let loaded = vec![ModelHandle {
+            id: "loaded-model".to_string(),
+            backend: "llama.cpp".to_string(),
+            status: LoadedModelStatus::Loaded,
+        }];
+
+        let data = openai_model_data(available, loaded);
+
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "available-model");
+        assert_eq!(data[0]["object"], "model");
+        assert_eq!(data[0]["owned_by"], "deeplocal");
+        assert_eq!(data[0]["status"], "available");
+        assert!(data[0]["created"].as_i64().is_some());
+        assert_eq!(data[1]["id"], "loaded-model");
+        assert_eq!(data[1]["status"], "loaded");
+        assert_eq!(data[1]["backend"], "llama.cpp");
+    }
+
+    #[test]
+    fn openai_models_keep_orphan_loaded_handles_visible() {
+        let data = openai_model_data(
+            Vec::new(),
+            vec![ModelHandle {
+                id: "orphan-loaded".to_string(),
+                backend: "mock".to_string(),
+                status: LoadedModelStatus::Loaded,
+            }],
+        );
+
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0]["id"], "orphan-loaded");
+        assert_eq!(data[0]["object"], "model");
+        assert_eq!(data[0]["created"], 0);
+        assert_eq!(data[0]["status"], "loaded");
     }
 }
 
@@ -1400,21 +1449,66 @@ async fn persist_download_job(storage: &Arc<Mutex<Storage>>, job: &DownloadJob) 
 }
 
 async fn openai_models(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
-    let data: Vec<_> = state
-        .runtime
-        .list_loaded_models()
-        .await
-        .into_iter()
-        .map(|model| {
-            serde_json::json!({
-                "id": model.id,
-                "object": "model",
-                "created": Utc::now().timestamp(),
-                "owned_by": "deeplocal"
-            })
-        })
-        .collect();
+    let available = state.runtime.list_models().await;
+    let loaded = state.runtime.list_loaded_models().await;
+    let data = openai_model_data(available, loaded);
     Json(serde_json::json!({ "object": "list", "data": data }))
+}
+
+fn openai_model_data(
+    available: Vec<ModelDescriptor>,
+    loaded: Vec<ModelHandle>,
+) -> Vec<serde_json::Value> {
+    let loaded_by_id: std::collections::HashMap<_, _> = loaded
+        .into_iter()
+        .map(|handle| (handle.id.clone(), handle))
+        .collect();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut data = Vec::new();
+
+    for model in available {
+        let loaded_handle = loaded_by_id.get(&model.id);
+        seen_ids.insert(model.id.clone());
+        data.push(serde_json::json!({
+            "id": model.id,
+            "object": "model",
+            "created": model.created_at.timestamp(),
+            "owned_by": "deeplocal",
+            "status": if loaded_handle.is_some() { "loaded" } else { "available" },
+            "backend": loaded_handle.map(|handle| handle.backend.as_str()),
+        }));
+    }
+
+    for handle in loaded_by_id.values() {
+        if seen_ids.contains(&handle.id) {
+            continue;
+        }
+        data.push(serde_json::json!({
+            "id": handle.id,
+            "object": "model",
+            "created": 0,
+            "owned_by": "deeplocal",
+            "status": match handle.status {
+                LoadedModelStatus::Loading => "loading",
+                LoadedModelStatus::Loaded => "loaded",
+                LoadedModelStatus::Unloading => "unloading",
+                LoadedModelStatus::Error => "error",
+            },
+            "backend": handle.backend,
+        }));
+    }
+
+    data.sort_by(|a, b| {
+        a.get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .cmp(
+                b.get("id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default(),
+            )
+    });
+    data
 }
 
 async fn chat_conversations(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
