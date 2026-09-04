@@ -1,7 +1,7 @@
 use deeplocal_core::{
     ChatMessage, ChatRole, GenerationParameters, GenerationRequest, LoadOptions, ModelDescriptor,
 };
-use deeplocal_runtime::{MockBackend, RuntimeManager};
+use deeplocal_runtime::{LlamaCppBackend, MockBackend, RuntimeManager};
 use futures::StreamExt;
 use std::sync::Arc;
 
@@ -50,4 +50,39 @@ async fn removes_registered_model_without_loading_it() {
     assert!(runtime.get_model("delete-me").await.is_some());
     assert!(runtime.remove_model("delete-me").await.is_some());
     assert!(runtime.get_model("delete-me").await.is_none());
+}
+
+#[tokio::test]
+async fn reports_backend_statuses() {
+    let runtime = RuntimeManager::default();
+    runtime.register_backend(Arc::new(MockBackend)).await;
+    runtime
+        .register_backend(Arc::new(LlamaCppBackend::new(
+            "/definitely/missing/llama-server",
+        )))
+        .await;
+
+    let statuses = runtime.list_backend_statuses().await;
+    let mock = statuses
+        .iter()
+        .find(|status| status.id == "mock")
+        .expect("mock status");
+    let llama = statuses
+        .iter()
+        .find(|status| status.id == "llama.cpp")
+        .expect("llama.cpp status");
+
+    assert!(mock.available);
+    assert!(!llama.available);
+    assert_eq!(
+        llama.binary_path.as_deref(),
+        Some("/definitely/missing/llama-server")
+    );
+    assert!(
+        llama
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("llama-server")
+    );
 }

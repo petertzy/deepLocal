@@ -83,6 +83,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/runtime/hardware", get(hardware))
+        .route("/runtime/backends", get(backends))
         .route("/runtime/models", get(models).post(register_model))
         .route("/runtime/models/delete", post(delete_model))
         .route("/runtime/models/loaded", get(loaded_models))
@@ -168,6 +169,12 @@ async fn hardware() -> Json<serde_json::Value> {
 
 async fn loaded_models(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!(state.runtime.list_loaded_models().await))
+}
+
+async fn backends(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!(
+        state.runtime.list_backend_statuses().await
+    ))
 }
 
 async fn models(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {

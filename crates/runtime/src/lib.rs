@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use deeplocal_core::{
-    ChatRole, GeneratedToken, GenerationRequest, InferenceBackend, LoadOptions, LoadedModelStatus,
-    ModelDescriptor, ModelFormat, ModelHandle,
+    BackendStatus, ChatRole, GeneratedToken, GenerationRequest, InferenceBackend, LoadOptions,
+    LoadedModelStatus, ModelDescriptor, ModelFormat, ModelHandle,
 };
 use futures::{StreamExt, stream::BoxStream};
 use std::{
@@ -98,6 +98,18 @@ impl RuntimeManager {
         self.loaded.read().await.values().cloned().collect()
     }
 
+    pub async fn list_backend_statuses(&self) -> Vec<BackendStatus> {
+        let mut statuses: Vec<_> = self
+            .backends
+            .read()
+            .await
+            .values()
+            .map(|backend| backend.status())
+            .collect();
+        statuses.sort_by(|a, b| a.id.cmp(&b.id));
+        statuses
+    }
+
     pub async fn generate(
         &self,
         request: GenerationRequest,
@@ -144,6 +156,15 @@ impl InferenceBackend for MockBackend {
 
     fn supported_formats(&self) -> Vec<ModelFormat> {
         vec![ModelFormat::Gguf]
+    }
+
+    fn status(&self) -> BackendStatus {
+        BackendStatus {
+            id: self.id().to_string(),
+            available: true,
+            binary_path: None,
+            error: None,
+        }
     }
 
     async fn load(
@@ -203,17 +224,33 @@ struct LlamaProcess {
     child: tokio::process::Child,
 }
 
+fn resolve_binary_path(binary: &PathBuf) -> Option<PathBuf> {
+    if binary.components().count() > 1 || binary.is_absolute() {
+        return binary.exists().then(|| binary.clone());
+    }
+
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|path| path.join(binary))
+            .find(|candidate| candidate.exists())
+    })
+}
+
 impl LlamaCppBackend {
+    pub fn new(binary: impl Into<PathBuf>) -> Self {
+        Self {
+            binary: binary.into(),
+            next_port: AtomicU16::new(18080),
+            processes: RwLock::new(HashMap::new()),
+        }
+    }
+
     pub fn from_env() -> Self {
         let binary = std::env::var("DEELOCAL_LLAMA_SERVER")
             .or_else(|_| std::env::var("DEEPLOCAL_LLAMA_SERVER"))
             .or_else(|_| std::env::var("LLAMA_SERVER"))
             .unwrap_or_else(|_| "llama-server".to_string());
-        Self {
-            binary: PathBuf::from(binary),
-            next_port: AtomicU16::new(18080),
-            processes: RwLock::new(HashMap::new()),
-        }
+        Self::new(binary)
     }
 
     async fn wait_until_ready(&self, port: u16) -> anyhow::Result<()> {
@@ -239,6 +276,26 @@ impl InferenceBackend for LlamaCppBackend {
 
     fn supported_formats(&self) -> Vec<ModelFormat> {
         vec![ModelFormat::Gguf]
+    }
+
+    fn status(&self) -> BackendStatus {
+        match resolve_binary_path(&self.binary) {
+            Some(path) => BackendStatus {
+                id: self.id().to_string(),
+                available: true,
+                binary_path: Some(path.to_string_lossy().to_string()),
+                error: None,
+            },
+            None => BackendStatus {
+                id: self.id().to_string(),
+                available: false,
+                binary_path: Some(self.binary.to_string_lossy().to_string()),
+                error: Some(
+                    "llama-server was not found. Install llama.cpp or set LLAMA_SERVER / DEEPLOCAL_LLAMA_SERVER to the llama-server binary."
+                        .to_string(),
+                ),
+            },
+        }
     }
 
     async fn load(

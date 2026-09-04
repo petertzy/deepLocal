@@ -17,6 +17,14 @@ pub struct ModelHandle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendStatus {
+    pub id: String,
+    pub available: bool,
+    pub binary_path: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadedModelStatus {
     Loading,
@@ -29,6 +37,7 @@ pub enum LoadedModelStatus {
 pub trait InferenceBackend: Send + Sync {
     fn id(&self) -> &str;
     fn supported_formats(&self) -> Vec<ModelFormat>;
+    fn status(&self) -> BackendStatus;
     async fn load(
         &self,
         model: ModelDescriptor,
