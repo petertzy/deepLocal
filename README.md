@@ -90,6 +90,46 @@ curl http://127.0.0.1:14567/v1/chat/completions \
 
 Load a model in the UI first, then use that model ID in API calls.
 
+Python with the OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:14567/v1",
+    api_key="not-needed",
+)
+
+response = client.chat.completions.create(
+    model="your-loaded-model-id",
+    messages=[
+        {"role": "user", "content": "Explain deepLocal in one sentence."},
+    ],
+)
+
+print(response.choices[0].message.content)
+```
+
+JavaScript or TypeScript with the OpenAI SDK:
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://127.0.0.1:14567/v1",
+  apiKey: "not-needed",
+});
+
+const response = await client.chat.completions.create({
+  model: "your-loaded-model-id",
+  messages: [
+    { role: "user", content: "Explain deepLocal in one sentence." },
+  ],
+});
+
+console.log(response.choices[0]?.message?.content);
+```
+
 ## Hugging Face Access
 
 Public model downloads work without a token. Gated models require a Hugging Face
