@@ -330,6 +330,12 @@ impl Storage {
         }
         Ok(deleted)
     }
+
+    pub fn delete_download_job(&self, id: &str) -> anyhow::Result<usize> {
+        Ok(self
+            .conn
+            .execute("delete from download_jobs where id = ?1", params![id])?)
+    }
 }
 
 fn parse_uuid(value: String) -> rusqlite::Result<Uuid> {

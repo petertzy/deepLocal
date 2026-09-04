@@ -803,6 +803,23 @@ function Models({
     await onRefresh();
   }
 
+  async function discardDownload(job: DownloadJob) {
+    if (!window.confirm(`Discard download for ${job.filename} and delete its partial file?`)) return;
+    const key = downloadKey(job.repo, job.filename);
+    setPendingDownloads((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    const res = await fetch(`${API_BASE}/runtime/downloads/discard`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ job_id: job.id, repo: job.repo, filename: job.filename }),
+    });
+    onNotice(res.ok ? `Discarded download for ${job.filename}.` : await res.text());
+    await onRefresh();
+  }
+
   async function clearDownloadHistory() {
     const res = await fetch(`${API_BASE}/runtime/downloads/clear-history`, { method: "POST" });
     if (res.ok) {
@@ -944,13 +961,28 @@ function Models({
                     {job.error && <p>{job.error}</p>}
                   </div>
                 ) : null}
-                <button
-                  disabled={job?.status === "cancelling"}
-                  onClick={() => (canCancel ? cancelDownload(job) : downloadFile(file.repo, file.filename, file.size_bytes))}
-                >
-                  <Download size={15} />
-                  {job ? downloadActionLabel(job) : "Download"}
-                </button>
+                <div className="downloadActions">
+                  {job && canCancel ? (
+                    <>
+                      <button disabled={job.status === "cancelling"} onClick={() => cancelDownload(job)}>
+                        <Square size={15} />
+                        {downloadActionLabel(job)}
+                      </button>
+                      <button className="dangerAction" onClick={() => discardDownload(job)}>
+                        <Trash2 size={15} />
+                        Discard
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      disabled={job?.status === "downloaded"}
+                      onClick={() => downloadFile(file.repo, file.filename, file.size_bytes)}
+                    >
+                      <Download size={15} />
+                      {job ? downloadActionLabel(job) : "Download"}
+                    </button>
+                  )}
+                </div>
             </article>
             );
           })}
@@ -973,6 +1005,20 @@ function Models({
                   </div>
                   <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
                   <em>{formatTransferredSize(job.downloaded_bytes)} of {formatFileSize(job.total_bytes)}</em>
+                  <div className="downloadActions">
+                    {job.status !== "downloaded" && (
+                      <>
+                        <button onClick={() => downloadFile(job.repo, job.filename, job.total_bytes)}>
+                          <Download size={15} />
+                          Retry
+                        </button>
+                        <button className="dangerAction" onClick={() => discardDownload(job)}>
+                          <Trash2 size={15} />
+                          Discard
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

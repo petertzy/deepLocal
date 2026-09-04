@@ -498,8 +498,8 @@ article p {
 }
 
 .searchModelCard {
-  grid-template-columns: minmax(0, 1fr) minmax(220px, auto) 150px;
-  align-items: center;
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 560px) 190px;
+  align-items: start;
 }
 
 .searchModelCard h2,
@@ -511,16 +511,34 @@ article p {
   grid-column: 1 / -1;
 }
 
-.searchModelCard > button {
+.searchModelCard > .downloadActions {
+  justify-self: end;
+  width: 190px;
+}
+
+.downloadActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.downloadActions button:only-child {
+  grid-column: 1 / -1;
   justify-self: end;
   width: 150px;
+}
+
+.downloadActions button {
+  min-width: 0;
+  padding: 0 10px;
 }
 
 .modelFileMeta {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
+  min-width: 0;
 }
 
 .modelFileMeta span {
@@ -580,7 +598,7 @@ article p {
 
 .historyRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 150px;
+  grid-template-columns: minmax(0, 1fr) auto 150px 190px;
   align-items: start;
   gap: 10px;
   padding: 10px;
@@ -1221,6 +1239,7 @@ label {
   .composer,
   .searchRow,
   .sortControl,
+  .downloadActions,
   .emptyState {
     grid-template-columns: 1fr;
   }

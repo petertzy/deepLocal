@@ -100,6 +100,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
             post(clear_download_history),
         )
         .route("/runtime/downloads/cancel", post(cancel_download))
+        .route("/runtime/downloads/discard", post(discard_download))
         .route(
             "/runtime/chat/conversations",
             get(chat_conversations).post(create_chat_conversation),
@@ -656,6 +657,47 @@ async fn cancel_download(
     }
 }
 
+async fn discard_download(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<CancelDownloadRequest>,
+) -> impl IntoResponse {
+    let mut jobs = state.downloads.write().await;
+    let job_id = if let Some(job_id) = body.job_id.as_deref() {
+        jobs.get(job_id).map(|job| job.id.clone())
+    } else if let (Some(repo), Some(filename)) = (body.repo.as_deref(), body.filename.as_deref()) {
+        jobs.values()
+            .find(|job| job.repo == repo && job.filename == filename)
+            .map(|job| job.id.clone())
+    } else {
+        None
+    };
+
+    let Some(job_id) = job_id else {
+        return (axum::http::StatusCode::NOT_FOUND, "download job not found").into_response();
+    };
+
+    let Some(mut job) = jobs.remove(&job_id) else {
+        return (axum::http::StatusCode::NOT_FOUND, "download job not found").into_response();
+    };
+
+    if is_cancellable(&job.status) {
+        job.cancel_requested = true;
+        job.status = "cancelling".to_string();
+        job.updated_at = Utc::now();
+    }
+    drop(jobs);
+
+    if let Some(local_path) = job.local_path.as_deref() {
+        let partial_path = partial_download_path(&PathBuf::from(local_path));
+        let _ = tokio::fs::remove_file(partial_path).await;
+    }
+
+    let storage = state.storage.lock().await;
+    let _ = storage.delete_download_job(&job.id);
+
+    Json(serde_json::json!({ "discarded": true, "id": job.id })).into_response()
+}
+
 async fn models_directory() -> Json<serde_json::Value> {
     let path = models_root();
     Json(serde_json::json!({ "path": path.to_string_lossy() }))
@@ -1113,7 +1155,8 @@ async fn download_cancel_requested(
         .read()
         .await
         .get(job_id)
-        .is_some_and(|job| job.cancel_requested)
+        .map(|job| job.cancel_requested)
+        .unwrap_or(true)
 }
 
 async fn mark_download_cancelled(
