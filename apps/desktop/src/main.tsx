@@ -6,6 +6,7 @@ import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
 import {
   Activity,
+  ArrowLeft,
   ArrowRight,
   Boxes,
   Check,
@@ -292,6 +293,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState(() => window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) ?? "");
+  const [showConversationList, setShowConversationList] = useState(false);
   const [streaming, setStreaming] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -324,6 +326,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   function selectConversation(id: string) {
     setActiveConversationId(id);
     window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, id);
+    setShowConversationList(false);
   }
 
   async function send() {
@@ -407,8 +410,8 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") onNotice("Chat generation stopped.");
       else {
-      onNotice("Chat request failed. Start the deepLocal API and load a model.");
-      refreshConversations();
+        onNotice("Chat request failed. Start the deepLocal API and load a model.");
+        refreshConversations();
       }
     } finally {
       abortRef.current = null;
@@ -430,6 +433,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
     const conversation: ChatConversation = await res.json();
     setConversations((items) => [conversation, ...items]);
     selectConversation(conversation.id);
+    setShowConversationList(false);
     onNotice("Conversation created.");
     return conversation;
   }
@@ -471,9 +475,13 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
   }
 
   return (
-    <div className="pane chatLayout">
-      <aside className="conversationList">
+    <div className={showConversationList ? "pane chatLayout showingConversations" : "pane chatLayout"}>
+      {showConversationList ? (
+      <section className="conversationList">
         <div className="conversationHeader">
+          <button className="iconButton" title="Back to current chat" onClick={() => setShowConversationList(false)}>
+            <ArrowRight size={16} />
+          </button>
           <strong>Conversations</strong>
           <button className="iconButton" title="New conversation" onClick={() => createConversation()}>
             <Plus size={16} />
@@ -498,10 +506,13 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
             <p>No conversations yet</p>
           )}
         </div>
-      </aside>
-
+      </section>
+      ) : (
       <div className="chat">
         <div className="chatHeader">
+          <button className="iconButton" title="Show conversations" onClick={() => setShowConversationList(true)}>
+            <ArrowLeft size={16} />
+          </button>
           <div className="chatTitle">
             <h2>{activeConversation?.title ?? "Chat"}</h2>
             <span title={conversationModel ?? "No model loaded"}>
@@ -605,6 +616,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
           )}
         </div>
       </div>
+      )}
     </div>
   );
 
