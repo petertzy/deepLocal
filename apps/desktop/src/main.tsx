@@ -1076,8 +1076,6 @@ function Models({
             icon={<FolderOpen size={22} />}
             title="No unregistered local files"
             description="Run a rescan after adding GGUF files to the models folder."
-            actionLabel={rescanning ? undefined : "Rescan"}
-            onAction={rescanning ? undefined : rescanModels}
           />
         )}
       </section>
@@ -1110,8 +1108,6 @@ function Models({
               icon={<Search size={22} />}
               title={searching ? "Searching model repositories" : "Search for a GGUF model"}
               description={searching ? "Results will appear here as soon as Hugging Face responds." : "Try a small instruct model first, then download the file that fits your hardware."}
-              actionLabel={searching ? undefined : "Search now"}
-              onAction={searching ? undefined : searchHuggingFace}
             />
           )}
           {sortedFiles.map((file) => {
