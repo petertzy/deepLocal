@@ -13,6 +13,7 @@ use deeplocal_core::{
     ChatMessage, ChatRole, GenerationParameters, GenerationRequest, LoadOptions, ModelDescriptor,
 };
 use deeplocal_runtime::RuntimeManager;
+use deeplocal_storage::Storage;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,7 +25,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{io::AsyncWriteExt, sync::RwLock};
+use tokio::{
+    io::AsyncWriteExt,
+    sync::{Mutex, RwLock},
+};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
@@ -69,6 +73,7 @@ const BLOCKED_MODEL_KEYWORDS: &[&str] = &[
 pub struct ApiState {
     pub runtime: RuntimeManager,
     pub downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
+    pub storage: Arc<Mutex<Storage>>,
 }
 
 pub fn router(runtime: RuntimeManager) -> Router {
@@ -89,6 +94,23 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .route("/runtime/downloads", get(downloads))
         .route("/runtime/downloads/clear-history", post(clear_download_history))
         .route("/runtime/downloads/cancel", post(cancel_download))
+        .route(
+            "/runtime/chat/conversations",
+            get(chat_conversations).post(create_chat_conversation),
+        )
+        .route(
+            "/runtime/chat/conversations/rename",
+            post(rename_chat_conversation),
+        )
+        .route(
+            "/runtime/chat/conversations/delete",
+            post(delete_chat_conversation),
+        )
+        .route(
+            "/runtime/chat/conversations/model",
+            post(update_chat_conversation_model),
+        )
+        .route("/runtime/chat/messages", post(append_chat_message))
         .route("/runtime/models/directory", get(models_directory))
         .route(
             "/runtime/models/open-directory",
@@ -101,11 +123,18 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .with_state(Arc::new(ApiState {
             runtime,
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            storage: Arc::new(Mutex::new(open_default_storage())),
         }))
 }
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "name": "deepLocal" }))
+}
+
+fn open_default_storage() -> Storage {
+    Storage::open("deeplocal.sqlite3")
+        .or_else(|_| Storage::open_memory())
+        .expect("open chat storage")
 }
 
 async fn hardware() -> Json<serde_json::Value> {
@@ -1019,6 +1048,125 @@ async fn openai_models(State(state): State<Arc<ApiState>>) -> Json<serde_json::V
         })
         .collect();
     Json(serde_json::json!({ "object": "list", "data": data }))
+}
+
+async fn chat_conversations(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    match storage.list_chat_sessions() {
+        Ok(sessions) => Json(sessions).into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateChatConversationRequest {
+    title: String,
+    model_id: Option<String>,
+}
+
+async fn create_chat_conversation(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<CreateChatConversationRequest>,
+) -> impl IntoResponse {
+    let title = body.title.trim();
+    if title.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "title is required").into_response();
+    }
+
+    let storage = state.storage.lock().await;
+    match storage.create_chat_session(title, body.model_id) {
+        Ok(session) => (axum::http::StatusCode::CREATED, Json(session)).into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameChatConversationRequest {
+    id: Uuid,
+    title: String,
+}
+
+async fn rename_chat_conversation(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<RenameChatConversationRequest>,
+) -> impl IntoResponse {
+    let title = body.title.trim();
+    if title.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "title is required").into_response();
+    }
+
+    let storage = state.storage.lock().await;
+    match storage.rename_chat_session(body.id, title) {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteChatConversationRequest {
+    id: Uuid,
+}
+
+async fn delete_chat_conversation(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<DeleteChatConversationRequest>,
+) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    match storage.delete_chat_session(body.id) {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateChatConversationModelRequest {
+    id: Uuid,
+    model_id: Option<String>,
+}
+
+async fn update_chat_conversation_model(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<UpdateChatConversationModelRequest>,
+) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    match storage.update_chat_session_model(body.id, body.model_id) {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AppendChatMessageRequest {
+    session_id: Uuid,
+    role: ChatRole,
+    content: String,
+}
+
+async fn append_chat_message(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<AppendChatMessageRequest>,
+) -> impl IntoResponse {
+    if body.content.trim().is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "content is required").into_response();
+    }
+
+    let storage = state.storage.lock().await;
+    match storage.append_chat_message(body.session_id, body.role, body.content) {
+        Ok(message) => (axum::http::StatusCode::CREATED, Json(message)).into_response(),
+        Err(error) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

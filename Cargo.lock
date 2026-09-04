@@ -303,6 +303,7 @@ dependencies = [
  "deeplocal-core",
  "deeplocal-hardware",
  "deeplocal-runtime",
+ "deeplocal-storage",
  "futures",
  "reqwest",
  "serde",
@@ -357,9 +358,11 @@ name = "deeplocal-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "deeplocal-core",
  "rusqlite",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

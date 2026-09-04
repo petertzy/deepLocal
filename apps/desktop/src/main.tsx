@@ -15,6 +15,8 @@ import {
   FolderOpen,
   Info,
   MessageSquare,
+  Pencil,
+  Plus,
   Play,
   RefreshCw,
   Search,
@@ -58,8 +60,19 @@ type LoadedModel = {
 };
 
 type ChatMessage = {
+  id?: string;
   role: "user" | "assistant";
   content: string;
+  created_at?: string;
+};
+
+type ChatConversation = {
+  id: string;
+  title: string;
+  model_id?: string | null;
+  messages: ChatMessage[];
+  created_at: string;
+  updated_at: string;
 };
 
 type HuggingFaceResult = {
@@ -92,7 +105,7 @@ type DownloadJob = {
 };
 
 const API_BASE = "http://127.0.0.1:14567";
-const CHAT_STORAGE_KEY = "deeplocal:chat-messages";
+const ACTIVE_CHAT_STORAGE_KEY = "deeplocal:active-chat-conversation";
 
 function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -277,128 +290,273 @@ function ProgressItem({ done, title, detail }: { done?: boolean; title: string; 
 
 function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpenModels: () => void; onNotice: (message: string) => void }) {
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
-  const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredChatMessages());
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState(() => window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) ?? "");
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
+  const conversationModel = activeConversation?.model_id ?? activeModel;
+  const messages = activeConversation?.messages ?? [];
+
+  const refreshConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/runtime/chat/conversations`);
+      if (!res.ok) throw new Error(await res.text());
+      const items: ChatConversation[] = await res.json();
+      setConversations(items);
+      setActiveConversationId((current) => {
+        const next = items.some((conversation) => conversation.id === current) ? current : (items[0]?.id ?? "");
+        if (next) window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, next);
+        else window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+        return next;
+      });
+    } catch {
+      setConversations([]);
+    }
+  }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
-  }, [messages]);
+    refreshConversations();
+  }, [refreshConversations]);
+
+  function selectConversation(id: string) {
+    setActiveConversationId(id);
+    window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, id);
+  }
 
   async function send() {
     const prompt = input.trim();
     if (!prompt) return;
-    if (!activeModel) {
-      setMessages((items) => [...items, { role: "assistant", content: "No model is loaded. Load a downloaded GGUF model first." }]);
+    if (!conversationModel) {
       onNotice("Load a model before chatting.");
       return;
     }
-    const nextMessages: ChatMessage[] = [...messages, { role: "user", content: prompt }];
-    setMessages(nextMessages);
+
     setInput("");
     try {
+      const conversation = activeConversation ?? (await createConversation(titleFromPrompt(prompt), conversationModel));
+      selectConversation(conversation.id);
+      if (!conversation.model_id) {
+        await updateConversationModel(conversation.id, conversationModel);
+      }
+      const userMessage = await appendConversationMessage(conversation.id, "user", prompt);
+      const nextMessages: ChatMessage[] = [...conversation.messages, userMessage];
+      updateConversationMessages(conversation.id, nextMessages, conversation.model_id ?? conversationModel);
+
       const res = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: activeModel,
+          model: conversation.model_id ?? conversationModel,
           stream: false,
           messages: nextMessages,
         }),
       });
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content ?? data.error ?? "No response";
-      setMessages((items) => [...items, { role: "assistant", content }]);
-      onNotice(`Chat completed with ${activeModel}.`);
+      const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
+      updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], conversation.model_id ?? conversationModel);
+      onNotice(`Chat completed with ${conversation.model_id ?? conversationModel}.`);
     } catch {
-      setMessages((items) => [...items, { role: "assistant", content: "Runtime is offline or the model is not loaded." }]);
       onNotice("Chat request failed. Start the deepLocal API and load a model.");
+      refreshConversations();
     }
   }
 
-  function clearChat() {
-    setMessages([]);
-    window.localStorage.removeItem(CHAT_STORAGE_KEY);
-    onNotice("Chat history cleared.");
+  async function createConversation(title = "New conversation", modelId = activeModel ?? null) {
+    const res = await fetch(`${API_BASE}/runtime/chat/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title, model_id: modelId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const conversation: ChatConversation = await res.json();
+    setConversations((items) => [conversation, ...items]);
+    selectConversation(conversation.id);
+    onNotice("Conversation created.");
+    return conversation;
+  }
+
+  async function renameConversation(conversation: ChatConversation) {
+    const title = window.prompt("Rename conversation", conversation.title)?.trim();
+    if (!title) return;
+    const res = await fetch(`${API_BASE}/runtime/chat/conversations/rename`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: conversation.id, title }),
+    });
+    if (!res.ok) {
+      onNotice(await res.text());
+      return;
+    }
+    setConversations((items) => items.map((item) => (item.id === conversation.id ? { ...item, title } : item)));
+    onNotice("Conversation renamed.");
+  }
+
+  async function deleteConversation(conversation: ChatConversation) {
+    if (!window.confirm(`Delete "${conversation.title}"?`)) return;
+    const res = await fetch(`${API_BASE}/runtime/chat/conversations/delete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: conversation.id }),
+    });
+    if (!res.ok) {
+      onNotice(await res.text());
+      return;
+    }
+    setConversations((items) => items.filter((item) => item.id !== conversation.id));
+    if (conversation.id === activeConversationId) {
+      window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+      setActiveConversationId("");
+    }
+    onNotice("Conversation deleted.");
+    refreshConversations();
   }
 
   return (
-    <div className="pane chat">
-      <div className="chatMeta">
-        <Boxes size={18} />
-        <span className="activeModel" title={activeModel ?? "No model loaded"}>
-          Active model: {activeModel ?? "No model loaded"}
-        </span>
-        <button className="iconButton" disabled={!messages.length} title="Clear chat history" onClick={clearChat}>
-          <Trash2 size={16} />
-        </button>
-      </div>
-      <div className="transcript">
-        {!messages.length && !activeModel ? (
-          <EmptyState
-            icon={<MessageSquare size={24} />}
-            title="Load a model to start chatting"
-            description="Choose a downloaded GGUF model first, then send prompts here through the local API."
-            actionLabel="Open models"
-            onAction={onOpenModels}
-          />
-        ) : (
-          messages.map((message, index) => (
-            <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              {message.role === "assistant" ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code({ className, children, ...props }) {
-                      const language = /language-(\w+)/.exec(className ?? "")?.[1];
-                      const code = String(children).replace(/\n$/, "");
+    <div className="pane chatLayout">
+      <aside className="conversationList">
+        <div className="conversationHeader">
+          <strong>Conversations</strong>
+          <button className="iconButton" title="New conversation" onClick={() => createConversation()}>
+            <Plus size={16} />
+          </button>
+        </div>
+        <div className="conversationItems">
+          {conversations.length ? (
+            conversations.map((conversation) => (
+              <button
+                className={conversation.id === activeConversation?.id ? "conversationItem active" : "conversationItem"}
+                key={conversation.id}
+                onClick={() => selectConversation(conversation.id)}
+              >
+                <span>{conversation.title}</span>
+                <small>{conversation.model_id ?? "No model yet"}</small>
+              </button>
+            ))
+          ) : (
+            <p>No conversations yet</p>
+          )}
+        </div>
+      </aside>
 
-                      if (language) {
-                        return (
-                          <SyntaxHighlighter
-                            PreTag="div"
-                            className="codeBlock"
-                            language={language}
-                            style={oneLight}
-                            customStyle={{
-                              margin: 0,
-                              padding: 0,
-                              background: "transparent",
-                            }}
-                            codeTagProps={{
-                              style: {
+      <div className="chat">
+        <div className="chatMeta">
+          <Boxes size={18} />
+          <span className="activeModel" title={conversationModel ?? "No model loaded"}>
+            Model: {conversationModel ?? "No model loaded"}
+          </span>
+          <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && renameConversation(activeConversation)}>
+            <Pencil size={16} />
+          </button>
+          <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && deleteConversation(activeConversation)}>
+            <Trash2 size={16} />
+          </button>
+        </div>
+        <div className="transcript">
+          {!messages.length && !conversationModel ? (
+            <EmptyState
+              icon={<MessageSquare size={24} />}
+              title="Load a model to start chatting"
+              description="Choose a downloaded GGUF model first, then send prompts here through the local API."
+              actionLabel="Open models"
+              onAction={onOpenModels}
+            />
+          ) : !activeConversation ? (
+            <EmptyState
+              icon={<MessageSquare size={24} />}
+              title="Start a conversation"
+              description="Create a conversation or send a prompt to begin a saved local chat."
+              actionLabel="New conversation"
+              onAction={() => createConversation()}
+            />
+          ) : (
+            messages.map((message, index) => (
+              <div className={`message ${message.role}`} key={message.id ?? `${message.role}-${index}`}>
+                {message.role === "assistant" ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children, ...props }) {
+                        const language = /language-(\w+)/.exec(className ?? "")?.[1];
+                        const code = String(children).replace(/\n$/, "");
+
+                        if (language) {
+                          return (
+                            <SyntaxHighlighter
+                              PreTag="div"
+                              className="codeBlock"
+                              language={language}
+                              style={oneLight}
+                              customStyle={{
+                                margin: 0,
+                                padding: 0,
                                 background: "transparent",
-                                fontFamily: "inherit",
-                              },
-                            }}
-                          >
-                            {code}
-                          </SyntaxHighlighter>
-                        );
-                      }
+                              }}
+                              codeTagProps={{
+                                style: {
+                                  background: "transparent",
+                                  fontFamily: "inherit",
+                                },
+                              }}
+                            >
+                              {code}
+                            </SyntaxHighlighter>
+                          );
+                        }
 
-                      return (
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                  }}
-                >
-                  {normalizeMarkdown(message.content)}
-                </ReactMarkdown>
-              ) : (
-                message.content
-              )}
-            </div>
-          ))
-        )}
-      </div>
-      <div className="composer">
-        <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
-        <button disabled={!activeModel} onClick={send}>Send</button>
+                        return (
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        );
+                      },
+                    }}
+                  >
+                    {normalizeMarkdown(message.content)}
+                  </ReactMarkdown>
+                ) : (
+                  message.content
+                )}
+              </div>
+            ))
+          )}
+        </div>
+        <div className="composer">
+          <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
+          <button disabled={!conversationModel} onClick={send}>Send</button>
+        </div>
       </div>
     </div>
   );
+
+  async function updateConversationModel(id: string, modelId: string) {
+    const res = await fetch(`${API_BASE}/runtime/chat/conversations/model`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, model_id: modelId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
+  async function appendConversationMessage(sessionId: string, role: ChatMessage["role"], content: string) {
+    const res = await fetch(`${API_BASE}/runtime/chat/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, role, content }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()) as ChatMessage;
+  }
+
+  function updateConversationMessages(id: string, nextMessages: ChatMessage[], modelId: string) {
+    setConversations((items) =>
+      items.map((conversation) =>
+        conversation.id === id
+          ? { ...conversation, model_id: modelId, messages: nextMessages, updated_at: new Date().toISOString() }
+          : conversation,
+      ),
+    );
+  }
 }
 
 function Models({
@@ -1353,23 +1511,9 @@ function isMarkdownTable(content: string) {
   });
 }
 
-function loadStoredChatMessages(): ChatMessage[] {
-  try {
-    const stored = window.localStorage.getItem(CHAT_STORAGE_KEY);
-    if (!stored) return [];
-
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter(
-      (message): message is ChatMessage =>
-        message &&
-        (message.role === "user" || message.role === "assistant") &&
-        typeof message.content === "string",
-    );
-  } catch {
-    return [];
-  }
+function titleFromPrompt(prompt: string) {
+  const title = prompt.replace(/\s+/g, " ").trim();
+  return title.length > 44 ? `${title.slice(0, 41)}...` : title || "New conversation";
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

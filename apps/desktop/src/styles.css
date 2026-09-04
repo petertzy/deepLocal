@@ -670,10 +670,86 @@ progress {
   accent-color: #2f6f62;
 }
 
+.chatLayout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.conversationList {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  min-width: 0;
+  min-height: 520px;
+  padding: 14px;
+  border-right: 1px solid #dde2e4;
+  background: #fbfcfc;
+}
+
+.conversationHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.conversationItems {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.conversationItems p {
+  color: #66727a;
+  font-size: 13px;
+}
+
+.conversationItem {
+  display: grid;
+  justify-content: stretch;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  color: #202428;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+
+.conversationItem.active,
+.conversationItem:hover {
+  border-color: #dde2e4;
+  background: #ffffff;
+}
+
+.conversationItem span,
+.conversationItem small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversationItem small {
+  color: #66727a;
+  font-size: 12px;
+}
+
 .chat {
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 14px;
+  min-width: 0;
+  min-height: 520px;
+  padding: 14px;
 }
 
 .chatMeta {
@@ -1081,6 +1157,7 @@ label {
     grid-template-columns: 1fr;
   }
 
+  .chatLayout,
   .dashboard,
   .downloadRow,
   .historyRow,
@@ -1094,6 +1171,12 @@ label {
   .sortControl,
   .emptyState {
     grid-template-columns: 1fr;
+  }
+
+  .conversationList {
+    min-height: 180px;
+    border-right: 0;
+    border-bottom: 1px solid #dde2e4;
   }
 
   .searchModelCard > button {

@@ -31,6 +31,16 @@ impl ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSession {
+    pub id: Uuid,
+    pub title: String,
+    pub model_id: Option<String>,
+    pub messages: Vec<ChatMessage>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationParameters {
     pub temperature: f32,
     pub top_p: f32,
