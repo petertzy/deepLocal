@@ -427,6 +427,36 @@ article p {
   color: #66727a;
 }
 
+.loadOptions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #edf0f1;
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.loadOptions label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.loadOptions span {
+  color: #66727a;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.loadOptions input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
 .modelTools {
   display: grid;
   grid-template-columns: minmax(180px, 240px) 1fr auto;
@@ -1239,6 +1269,7 @@ label {
   .fileRow,
   .searchModelCard,
   .apiEndpoint,
+  .loadOptions,
   .modelTools,
   .modelPath,
   .composer,

@@ -105,8 +105,54 @@ type DownloadJob = {
   cancel_requested?: boolean;
 };
 
+type ModelLoadOptions = {
+  context_length: number;
+  gpu_layers: number;
+};
+
+type StoredModelLoadOptions = Record<string, ModelLoadOptions>;
+
 const API_BASE = "http://127.0.0.1:14567";
 const ACTIVE_CHAT_STORAGE_KEY = "deeplocal:active-chat-conversation";
+const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
+
+function defaultLoadOptions(hardware: HardwareProfile | null): ModelLoadOptions {
+  const isAppleSilicon =
+    hardware?.os.toLowerCase().includes("darwin") && hardware?.arch.toLowerCase().includes("arm");
+  return {
+    context_length: isAppleSilicon ? 4096 : 2048,
+    gpu_layers: isAppleSilicon ? -1 : 0,
+  };
+}
+
+function sanitizeLoadOptions(value: Partial<ModelLoadOptions>, fallback: ModelLoadOptions): ModelLoadOptions {
+  const context = Number(value.context_length);
+  const gpuLayers = Number(value.gpu_layers);
+  return {
+    context_length: Number.isFinite(context) && context >= 512 ? Math.round(context) : fallback.context_length,
+    gpu_layers: Number.isFinite(gpuLayers) ? Math.round(gpuLayers) : fallback.gpu_layers,
+  };
+}
+
+function readStoredModelLoadOptions(): StoredModelLoadOptions {
+  try {
+    const raw = window.localStorage.getItem(MODEL_LOAD_OPTIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, Partial<ModelLoadOptions>>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([modelId, options]) => [
+        modelId,
+        sanitizeLoadOptions(options, { context_length: 4096, gpu_layers: -1 }),
+      ]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredModelLoadOptions(options: StoredModelLoadOptions) {
+  window.localStorage.setItem(MODEL_LOAD_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+}
 
 function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -217,6 +263,7 @@ function App() {
             models={models}
             loaded={loaded}
             downloads={downloads}
+            hardware={hardware}
             modelsDirectory={modelsDirectory}
             hfToken={hfToken}
             onNotice={setNotice}
@@ -660,6 +707,7 @@ function Models({
   models,
   loaded,
   downloads,
+  hardware,
   modelsDirectory,
   hfToken,
   onNotice,
@@ -668,6 +716,7 @@ function Models({
   models: ModelDescriptor[];
   loaded: LoadedModel[];
   downloads: DownloadJob[];
+  hardware: HardwareProfile | null;
   modelsDirectory: string;
   hfToken: string;
   onNotice: (message: string) => void;
@@ -681,6 +730,8 @@ function Models({
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
+  const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
+  const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
 
   const downloadByFile = useMemo(() => {
     const items = new Map<string, DownloadJob>();
@@ -717,13 +768,32 @@ function Models({
   }
 
   async function load(modelId: string) {
+    const options = loadOptionsForModel(modelId);
     const res = await fetch(`${API_BASE}/runtime/models/load`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model_id: modelId, backend: "llama.cpp", context_length: 4096, gpu_layers: -1 }),
+      body: JSON.stringify({ model_id: modelId, backend: "llama.cpp", ...options }),
     });
     onNotice(res.ok ? `Loaded ${modelId}.` : await res.text());
     await onRefresh();
+  }
+
+  function loadOptionsForModel(modelId: string) {
+    return sanitizeLoadOptions(loadOptionsByModel[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
+  }
+
+  function updateLoadOption(modelId: string, field: keyof ModelLoadOptions, value: string) {
+    const numericValue = Number(value);
+    setLoadOptionsByModel((current) => {
+      const currentOptions = sanitizeLoadOptions(current[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
+      const nextOptions = sanitizeLoadOptions(
+        { ...currentOptions, [field]: numericValue },
+        fallbackLoadOptions,
+      );
+      const next = { ...current, [modelId]: nextOptions };
+      writeStoredModelLoadOptions(next);
+      return next;
+    });
   }
 
   async function unload(modelId: string) {
@@ -1060,6 +1130,7 @@ function Models({
         {models.map((model) => {
           const handle = loaded.find((item) => item.id === model.id);
           const modelPath = resolveModelPath(model.local_path, modelsDirectory);
+          const loadOptions = loadOptionsForModel(model.id);
           return (
             <article key={model.id}>
               <h2>{model.name}</h2>
@@ -1070,6 +1141,11 @@ function Models({
                 <span>{modelPath ?? "No local path registered"}</span>
                 <CopyButton disabled={!modelPath} onCopy={() => copyModelPath(model, modelPath)} />
               </div>
+              <ModelLoadOptionsFields
+                disabled={!!handle}
+                options={loadOptions}
+                onChange={(field, value) => updateLoadOption(model.id, field, value)}
+              />
               <div className="actions">
                 {handle ? (
                   <button onClick={() => unload(model.id)}>
@@ -1110,14 +1186,54 @@ function Models({
           model={detailsModel}
           modelPath={detailsPath}
           handle={detailsHandle}
+          loadOptions={loadOptionsForModel(detailsModel.id)}
           onClose={() => setDetailsModelId(null)}
           onCopyPath={() => copyModelPath(detailsModel, detailsPath)}
+          onLoadOptionChange={(field, value) => updateLoadOption(detailsModel.id, field, value)}
           onLoad={() => load(detailsModel.id)}
           onUnload={() => unload(detailsModel.id)}
           onReveal={() => revealModel(detailsModel, detailsPath)}
           onDelete={() => deleteModel(detailsModel, detailsPath)}
         />
       )}
+    </div>
+  );
+}
+
+function ModelLoadOptionsFields({
+  disabled,
+  options,
+  onChange,
+}: {
+  disabled: boolean;
+  options: ModelLoadOptions;
+  onChange: (field: keyof ModelLoadOptions, value: string) => void;
+}) {
+  return (
+    <div className="loadOptions">
+      <label>
+        <span>Context length</span>
+        <input
+          disabled={disabled}
+          inputMode="numeric"
+          min={512}
+          step={512}
+          type="number"
+          value={options.context_length}
+          onChange={(event) => onChange("context_length", event.target.value)}
+        />
+      </label>
+      <label>
+        <span>GPU layers</span>
+        <input
+          disabled={disabled}
+          inputMode="numeric"
+          step={1}
+          type="number"
+          value={options.gpu_layers}
+          onChange={(event) => onChange("gpu_layers", event.target.value)}
+        />
+      </label>
     </div>
   );
 }
@@ -1246,8 +1362,10 @@ function ModelDetailsDrawer({
   model,
   modelPath,
   handle,
+  loadOptions,
   onClose,
   onCopyPath,
+  onLoadOptionChange,
   onLoad,
   onUnload,
   onReveal,
@@ -1256,8 +1374,10 @@ function ModelDetailsDrawer({
   model: ModelDescriptor;
   modelPath: string | null;
   handle: LoadedModel | null;
+  loadOptions: ModelLoadOptions;
   onClose: () => void;
   onCopyPath: () => Promise<boolean>;
+  onLoadOptionChange: (field: keyof ModelLoadOptions, value: string) => void;
   onLoad: () => Promise<void>;
   onUnload: () => Promise<void>;
   onReveal: () => Promise<void>;
@@ -1302,6 +1422,8 @@ function ModelDetailsDrawer({
           <DetailItem label="Capabilities" value={capabilities} />
           <DetailItem label="Load state" value={loadState} />
         </div>
+
+        <ModelLoadOptionsFields disabled={!!handle} options={loadOptions} onChange={onLoadOptionChange} />
 
         <div className="drawerActions">
           <CopyButton disabled={!modelPath} onCopy={onCopyPath} />
