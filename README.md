@@ -43,8 +43,12 @@ Useful commands:
 ./scripts/start-dev.sh --restart
 ./scripts/start-dev.sh --stop
 ./scripts/start-dev.sh --build
+./scripts/uninstall-local.sh
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
+
+Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
+`llama.cpp` after cleaning local project artifacts.
 
 ## Requirements
 

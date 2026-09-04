@@ -19,6 +19,9 @@ http://127.0.0.1:5173/
 
 The startup script runs the backend and frontend together. On macOS, it tries to
 install `llama.cpp` with Homebrew if `llama-server` is missing.
+Run `./scripts/uninstall-local.sh` to remove generated project artifacts such as
+models, local databases, build output, and frontend dependencies. Add
+`--remove-llama` only when you also want to uninstall Homebrew `llama.cpp`.
 
 ## Development Requirements
 
