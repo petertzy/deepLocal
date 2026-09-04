@@ -88,6 +88,7 @@ pub fn router(runtime: RuntimeManager) -> Router {
         .route("/runtime/models/delete", post(delete_model))
         .route("/runtime/models/loaded", get(loaded_models))
         .route("/runtime/models/load", post(load_model))
+        .route("/runtime/models/rescan", post(rescan_models))
         .route("/runtime/models/unload", post(unload_model))
         .route("/runtime/huggingface/search", get(huggingface_search))
         .route(
@@ -192,9 +193,81 @@ async fn register_model(
     State(state): State<Arc<ApiState>>,
     Json(model): Json<ModelDescriptor>,
 ) -> impl IntoResponse {
+    if state.runtime.get_model(&model.id).await.is_some() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            format!("Model id already exists: {}", model.id),
+        )
+            .into_response();
+    }
     let model = model_with_local_size(absolutize_model_paths(model));
     state.runtime.register_model(model.clone()).await;
     (axum::http::StatusCode::CREATED, Json(model)).into_response()
+}
+
+#[derive(Debug, Serialize)]
+struct DiscoveredModelFile {
+    filename: String,
+    path: String,
+    size_bytes: u64,
+    suggested_model_id: String,
+}
+
+async fn rescan_models(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
+    let registered_models = state.runtime.list_models().await;
+    let registered_paths: std::collections::HashSet<_> = registered_models
+        .iter()
+        .filter_map(|model| model.local_path.as_deref())
+        .map(absolute_path_string)
+        .collect();
+    let mut used_ids: std::collections::HashSet<_> =
+        registered_models.iter().map(|model| model.id.clone()).collect();
+    let root = models_root();
+    let mut discovered = Vec::new();
+
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Json(serde_json::json!({ "files": discovered })).into_response();
+        }
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !is_gguf_path(&path) {
+            continue;
+        }
+        let absolute_path = absolute_path(path);
+        let path_string = absolute_path.to_string_lossy().to_string();
+        if registered_paths.contains(&path_string) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::metadata(&absolute_path) else {
+            continue;
+        };
+        let filename = absolute_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "model.gguf".to_string());
+        let base_id = model_id_from_filename(&filename);
+        let suggested_model_id = unique_model_id(&base_id, &mut used_ids);
+        discovered.push(DiscoveredModelFile {
+            filename,
+            path: path_string,
+            size_bytes: metadata.len(),
+            suggested_model_id,
+        });
+    }
+
+    discovered.sort_by(|a, b| a.filename.cmp(&b.filename));
+    Json(serde_json::json!({ "files": discovered })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -590,8 +663,9 @@ async fn huggingface_auth_check(
 mod tests {
     use super::{
         calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
-        range_header,
+        model_id_from_filename, range_header, unique_model_id,
     };
+    use std::collections::HashSet;
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -642,6 +716,19 @@ mod tests {
     fn model_delete_paths_must_stay_inside_models_root() {
         assert!(is_inside_models_root("./models/example/model.gguf"));
         assert!(!is_inside_models_root("../outside/model.gguf"));
+    }
+
+    #[test]
+    fn model_ids_are_derived_from_gguf_filenames() {
+        assert_eq!(model_id_from_filename("gemma 3 1b.Q4_K_M.gguf"), "gemma-3-1b.Q4_K_M");
+        assert_eq!(model_id_from_filename("!!!.gguf"), "local-model");
+    }
+
+    #[test]
+    fn discovered_model_ids_do_not_duplicate_existing_ids() {
+        let mut used = HashSet::from(["gemma".to_string(), "gemma-2".to_string()]);
+        assert_eq!(unique_model_id("gemma", &mut used), "gemma-3");
+        assert!(used.contains("gemma-3"));
     }
 }
 
@@ -896,6 +983,49 @@ async fn huggingface_download(
 
 fn models_root() -> PathBuf {
     absolute_path(PathBuf::from("./models"))
+}
+
+fn is_gguf_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+}
+
+fn model_id_from_filename(filename: &str) -> String {
+    let stem = filename
+        .strip_suffix(".gguf")
+        .or_else(|| filename.strip_suffix(".GGUF"))
+        .unwrap_or(filename);
+    let id: String = stem
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let id = id.trim_matches('-').to_string();
+    if id.is_empty() {
+        "local-model".to_string()
+    } else {
+        id
+    }
+}
+
+fn unique_model_id(base_id: &str, used_ids: &mut std::collections::HashSet<String>) -> String {
+    if used_ids.insert(base_id.to_string()) {
+        return base_id.to_string();
+    }
+
+    for index in 2.. {
+        let candidate = format!("{base_id}-{index}");
+        if used_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded model id suffix search should always find a free id")
 }
 
 fn is_inside_models_root(path: &str) -> bool {

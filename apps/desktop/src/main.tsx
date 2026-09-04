@@ -105,6 +105,13 @@ type DownloadJob = {
   cancel_requested?: boolean;
 };
 
+type DiscoveredModelFile = {
+  filename: string;
+  path: string;
+  size_bytes: number;
+  suggested_model_id: string;
+};
+
 type ModelLoadOptions = {
   context_length: number;
   gpu_layers: number;
@@ -731,6 +738,8 @@ function Models({
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
   const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
+  const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>([]);
+  const [rescanning, setRescanning] = useState(false);
   const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
 
   const downloadByFile = useMemo(() => {
@@ -741,6 +750,7 @@ function Models({
     return items;
   }, [downloads]);
   const downloadHistory = useMemo(() => downloads.filter((job) => isDownloadHistory(job.status)), [downloads]);
+  const canRegisterManualModel = !!id.trim() && !!path.trim();
 
   useEffect(() => {
     setPendingDownloads((current) => {
@@ -763,8 +773,50 @@ function Models({
       headers: { "content-type": "application/json" },
       body: JSON.stringify(descriptor),
     });
-    onNotice(res.ok ? `Registered ${id}.` : `Failed to register ${id}.`);
+    onNotice(res.ok ? `Registered ${id}.` : await res.text());
     await onRefresh();
+  }
+
+  function updateManualPath(value: string) {
+    setPath(value);
+    if (!id.trim()) {
+      setId(modelIdFromPath(value));
+    }
+  }
+
+  async function registerDiscoveredFile(file: DiscoveredModelFile) {
+    const descriptor = createLocalDescriptor(file.suggested_model_id, file.path);
+    descriptor.name = file.suggested_model_id;
+    descriptor.size_bytes = file.size_bytes;
+    const res = await fetch(`${API_BASE}/runtime/models`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(descriptor),
+    });
+    if (res.ok) {
+      onNotice(`Registered ${file.suggested_model_id}.`);
+      setDiscoveredFiles((current) => current.filter((item) => item.path !== file.path));
+      await onRefresh();
+    } else {
+      onNotice(await res.text());
+      await rescanModels();
+    }
+  }
+
+  async function rescanModels() {
+    setRescanning(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/models/rescan`, { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { files: DiscoveredModelFile[] };
+      setDiscoveredFiles(data.files);
+      onNotice(data.files.length ? `Found ${data.files.length} unregistered GGUF files.` : "No unregistered GGUF files found.");
+    } catch (error) {
+      setDiscoveredFiles([]);
+      onNotice(error instanceof Error ? error.message : "Model rescan failed.");
+    } finally {
+      setRescanning(false);
+    }
   }
 
   async function load(modelId: string) {
@@ -989,6 +1041,46 @@ function Models({
         </div>
       </div>
       <div className="folderPath">{modelsDirectory}</div>
+      <section className="discoveredPanel">
+        <div className="sectionTitle">
+          <h2>Local GGUF discovery</h2>
+          <span>{rescanning ? "scanning" : `${discoveredFiles.length} unregistered`}</span>
+        </div>
+        <div className="discoveryToolbar">
+          <p>Scan the models folder for GGUF files that are not registered yet.</p>
+          <button onClick={rescanModels} disabled={rescanning}>
+            <RefreshCw size={16} />
+            Rescan
+          </button>
+        </div>
+        {discoveredFiles.length ? (
+          <div className="discoveredList">
+            {discoveredFiles.map((file) => (
+              <div className="discoveredRow" key={file.path}>
+                <div>
+                  <strong>{file.filename}</strong>
+                  <p>{file.path}</p>
+                </div>
+                <span>{formatFileSize(file.size_bytes)}</span>
+                <code>{file.suggested_model_id}</code>
+                <button onClick={() => registerDiscoveredFile(file)}>
+                  <Plus size={15} />
+                  Register
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            compact
+            icon={<FolderOpen size={22} />}
+            title="No unregistered local files"
+            description="Run a rescan after adding GGUF files to the models folder."
+            actionLabel={rescanning ? undefined : "Rescan"}
+            onAction={rescanning ? undefined : rescanModels}
+          />
+        )}
+      </section>
       <section className="discoverPanel">
         <div className="sectionTitle">
           <h2>Hugging Face GGUF search</h2>
@@ -1121,18 +1213,41 @@ function Models({
           />
         )}
       </section>
-      <div className="modelTools">
-        <input value={id} onChange={(event) => setId(event.target.value)} />
-        <input value={path} onChange={(event) => setPath(event.target.value)} />
-        <button onClick={register}>Register</button>
-      </div>
-      <div className="grid">
+      <section className="manualRegistration">
+        <div className="sectionTitle">
+          <h2>Manual registration</h2>
+          <span>existing local file</span>
+        </div>
+        <div className="modelTools">
+          <label>
+            <span>Model ID</span>
+            <input
+              placeholder="gemma-3-1b-local"
+              value={id}
+              onChange={(event) => setId(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>GGUF file path</span>
+            <input
+              placeholder={`${modelsDirectory}/model.gguf`}
+              value={path}
+              onChange={(event) => updateManualPath(event.target.value)}
+            />
+          </label>
+          <button disabled={!canRegisterManualModel} onClick={register}>
+            <Plus size={15} />
+            Register
+          </button>
+        </div>
+      </section>
+      <div className="registeredModelList">
         {models.map((model) => {
           const handle = loaded.find((item) => item.id === model.id);
           const modelPath = resolveModelPath(model.local_path, modelsDirectory);
           const loadOptions = loadOptionsForModel(model.id);
           return (
-            <article key={model.id}>
+            <article className="registeredModelRow" key={model.id}>
               <h2>{model.name}</h2>
               <p>
                 {model.source} / {model.format}
@@ -1591,6 +1706,13 @@ function createLocalDescriptor(id: string, path: string): ModelDescriptor & Reco
     created_at: now,
     updated_at: now,
   };
+}
+
+function modelIdFromPath(path: string) {
+  const filename = path.trim().split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const stem = filename.replace(/\.gguf$/i, "");
+  const id = stem.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return id || "";
 }
 
 function resolveModelPath(path: string | null | undefined, modelsDirectory: string) {

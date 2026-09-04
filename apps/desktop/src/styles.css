@@ -298,9 +298,9 @@ article p,
   font-size: 13px;
 }
 
-.grid {
+.registeredModelList {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-content: start;
 }
@@ -460,11 +460,25 @@ article p {
 .modelTools {
   display: grid;
   grid-template-columns: minmax(180px, 240px) 1fr auto;
+  align-items: end;
   gap: 10px;
-  margin-bottom: 14px;
+}
+
+.modelTools label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.modelTools span {
+  color: #66727a;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .discoverPanel,
+.discoveredPanel,
+.manualRegistration,
 .downloadPanel,
 .downloadHistory {
   display: grid;
@@ -475,6 +489,7 @@ article p {
 }
 
 .sectionTitle,
+.discoveryToolbar,
 .searchRow,
 .fileRow,
 .downloadRow {
@@ -496,6 +511,53 @@ article p {
   font-style: normal;
 }
 
+.discoveryToolbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.discoveryToolbar p {
+  min-width: 0;
+  color: #66727a;
+}
+
+.discoveredList {
+  display: grid;
+  gap: 8px;
+}
+
+.discoveredRow {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto minmax(160px, 240px) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #dde2e4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.discoveredRow div,
+.discoveredRow p,
+.discoveredRow code {
+  min-width: 0;
+}
+
+.discoveredRow p {
+  margin-top: 4px;
+  color: #66727a;
+  overflow-wrap: anywhere;
+}
+
+.discoveredRow code {
+  padding: 6px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  color: #4d5a61;
+  background: #eef2f1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .searchRow {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
@@ -514,6 +576,8 @@ article p {
 
 .searchRow button,
 .fileRow button,
+.discoveryToolbar button,
+.discoveredRow button,
 .searchModelCard > button {
   padding: 0 12px;
   color: #ffffff;
@@ -1264,8 +1328,11 @@ label {
 
   .chatLayout,
   .dashboard,
+  .registeredModelRow,
   .downloadRow,
   .historyRow,
+  .discoveryToolbar,
+  .discoveredRow,
   .fileRow,
   .searchModelCard,
   .apiEndpoint,
