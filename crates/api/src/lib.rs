@@ -15,7 +15,7 @@ use deeplocal_core::{
 };
 use deeplocal_runtime::RuntimeManager;
 use deeplocal_storage::Storage;
-use futures::StreamExt;
+use futures::{StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -39,6 +39,7 @@ pub struct ApiState {
     pub downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     pub storage: Arc<Mutex<Storage>>,
     pub search_filters: Arc<RwLock<SearchFiltersConfig>>,
+    pub huggingface_size_cache: Arc<RwLock<HashMap<String, HashMap<String, u64>>>>,
 }
 
 pub fn router(runtime: RuntimeManager) -> Router {
@@ -114,6 +115,7 @@ pub fn router_with_options(
             downloads: Arc::new(RwLock::new(restored_downloads)),
             storage: Arc::new(Mutex::new(storage)),
             search_filters: Arc::new(RwLock::new(initial_search_filters)),
+            huggingface_size_cache: Arc::new(RwLock::new(HashMap::new())),
         }));
 
     if enable_cors {
@@ -488,19 +490,94 @@ async fn huggingface_search(
         })
         .collect();
 
-    for result in &mut results {
-        let sizes = huggingface_file_sizes(&client, &result.repo, token.as_deref())
-            .await
-            .unwrap_or_default();
-        for file in result.files.iter_mut() {
-            file.size_bytes = file
-                .size_bytes
-                .filter(|size| *size > 0)
-                .or_else(|| sizes.get(&file.filename).copied());
-        }
-    }
+    fill_missing_huggingface_sizes(
+        &client,
+        token.as_deref(),
+        &state.huggingface_size_cache,
+        &mut results,
+    )
+    .await;
 
     Json(results).into_response()
+}
+
+async fn fill_missing_huggingface_sizes(
+    client: &reqwest::Client,
+    token: Option<&str>,
+    cache: &Arc<RwLock<HashMap<String, HashMap<String, u64>>>>,
+    results: &mut [HuggingFaceModelResult],
+) {
+    let repos_needing_sizes: Vec<_> = results
+        .iter()
+        .filter(|result| {
+            result
+                .files
+                .iter()
+                .any(|file| !has_known_size(file.size_bytes))
+        })
+        .map(|result| result.repo.clone())
+        .collect();
+    if repos_needing_sizes.is_empty() {
+        return;
+    }
+
+    let cached_sizes = cache.read().await.clone();
+    let mut missing_repos = Vec::new();
+    for result in results.iter_mut() {
+        if let Some(sizes) = cached_sizes.get(&result.repo) {
+            apply_huggingface_sizes(result, sizes);
+        } else if repos_needing_sizes.contains(&result.repo) {
+            missing_repos.push(result.repo.clone());
+        }
+    }
+    missing_repos.sort();
+    missing_repos.dedup();
+
+    let mut lookups = FuturesUnordered::new();
+    for repo in missing_repos {
+        let client = client.clone();
+        let token = token.map(str::to_string);
+        lookups.push(async move {
+            let sizes = tokio::time::timeout(
+                Duration::from_secs(3),
+                huggingface_file_sizes(&client, &repo, token.as_deref()),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+            (repo, sizes)
+        });
+    }
+
+    let mut fetched_sizes = HashMap::new();
+    while let Some((repo, sizes)) = lookups.next().await {
+        if !sizes.is_empty() {
+            fetched_sizes.insert(repo, sizes);
+        }
+    }
+    if fetched_sizes.is_empty() {
+        return;
+    }
+
+    cache.write().await.extend(fetched_sizes.clone());
+    for result in results {
+        if let Some(sizes) = fetched_sizes.get(&result.repo) {
+            apply_huggingface_sizes(result, sizes);
+        }
+    }
+}
+
+fn has_known_size(size: Option<u64>) -> bool {
+    size.is_some_and(|size| size > 0)
+}
+
+fn apply_huggingface_sizes(result: &mut HuggingFaceModelResult, sizes: &HashMap<String, u64>) {
+    for file in result.files.iter_mut() {
+        if !has_known_size(file.size_bytes) {
+            file.size_bytes = sizes.get(&file.filename).copied();
+        }
+    }
 }
 
 fn is_blocked_model_text(text: &str, blocked_keywords: &[String]) -> bool {
@@ -686,12 +763,12 @@ async fn huggingface_auth_check(
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenAiChatRequest, calculate_eta_seconds, is_download_history, is_gguf_header,
-        is_inside_models_root, model_id_from_filename, openai_model_data, range_header,
-        unique_model_id,
+        HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, apply_huggingface_sizes,
+        calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
+        model_id_from_filename, openai_model_data, range_header, unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -852,6 +929,42 @@ mod tests {
                 .to_string()
                 .contains("stop must be a string or an array of strings")
         );
+    }
+
+    #[test]
+    fn huggingface_size_fallback_keeps_sibling_metadata() {
+        let mut result = HuggingFaceModelResult {
+            repo: "owner/repo".to_string(),
+            downloads: None,
+            likes: None,
+            files: vec![HuggingFaceFileResult {
+                filename: "model.gguf".to_string(),
+                size_bytes: Some(42),
+            }],
+        };
+        let tree_sizes = HashMap::from([("model.gguf".to_string(), 100)]);
+
+        apply_huggingface_sizes(&mut result, &tree_sizes);
+
+        assert_eq!(result.files[0].size_bytes, Some(42));
+    }
+
+    #[test]
+    fn huggingface_size_fallback_fills_missing_sizes() {
+        let mut result = HuggingFaceModelResult {
+            repo: "owner/repo".to_string(),
+            downloads: None,
+            likes: None,
+            files: vec![HuggingFaceFileResult {
+                filename: "model.gguf".to_string(),
+                size_bytes: None,
+            }],
+        };
+        let tree_sizes = HashMap::from([("model.gguf".to_string(), 100)]);
+
+        apply_huggingface_sizes(&mut result, &tree_sizes);
+
+        assert_eq!(result.files[0].size_bytes, Some(100));
     }
 }
 
