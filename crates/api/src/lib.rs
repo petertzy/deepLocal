@@ -11,7 +11,7 @@ use axum::{
 use chrono::Utc;
 use deeplocal_core::{
     ChatMessage, ChatRole, DownloadJob, GenerationParameters, GenerationRequest, LoadOptions,
-    LoadedModelStatus, ModelDescriptor, ModelHandle,
+    LoadedModelStatus, ModelDescriptor, ModelHandle, SearchFiltersConfig,
 };
 use deeplocal_runtime::RuntimeManager;
 use deeplocal_storage::Storage;
@@ -33,48 +33,12 @@ use tokio::{
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
-const BLOCKED_MODEL_KEYWORDS: &[&str] = &[
-    "nsfw",
-    "uncensored",
-    "abliterated",
-    "abliteration",
-    "dolphin",
-    "erotic",
-    "porn",
-    "sex",
-    "roleplay",
-    "qwen",
-    "qwq",
-    "kimi",
-    "moonshot",
-    "deepseek",
-    "deepseek-ai",
-    "baichuan",
-    "yi-",
-    "01-ai",
-    "internlm",
-    "chatglm",
-    "glm",
-    "zhipu",
-    "hunyuan",
-    "tencent",
-    "alibaba",
-    "alipay",
-    "bytedance",
-    "doubao",
-    "minimax",
-    "stepfun",
-    "baidu",
-    "ernie",
-    "sparkdesk",
-    "iflytek",
-];
-
 #[derive(Clone)]
 pub struct ApiState {
     pub runtime: RuntimeManager,
     pub downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     pub storage: Arc<Mutex<Storage>>,
+    pub search_filters: Arc<RwLock<SearchFiltersConfig>>,
 }
 
 pub fn router(runtime: RuntimeManager) -> Router {
@@ -82,6 +46,14 @@ pub fn router(runtime: RuntimeManager) -> Router {
 }
 
 pub fn router_with_cors(runtime: RuntimeManager, enable_cors: bool) -> Router {
+    router_with_options(runtime, enable_cors, SearchFiltersConfig::default())
+}
+
+pub fn router_with_options(
+    runtime: RuntimeManager,
+    enable_cors: bool,
+    initial_search_filters: SearchFiltersConfig,
+) -> Router {
     let storage = open_default_storage();
     let restored_downloads = restore_download_jobs(&storage);
     let router = Router::new()
@@ -95,6 +67,11 @@ pub fn router_with_cors(runtime: RuntimeManager, enable_cors: bool) -> Router {
         .route("/runtime/models/rescan", post(rescan_models))
         .route("/runtime/models/unload", post(unload_model))
         .route("/runtime/huggingface/search", get(huggingface_search))
+        .route("/runtime/search-filters", get(get_search_filters))
+        .route(
+            "/runtime/search-filters/blocked-keywords",
+            post(add_blocked_keyword),
+        )
         .route(
             "/runtime/huggingface/auth-check",
             post(huggingface_auth_check),
@@ -136,6 +113,7 @@ pub fn router_with_cors(runtime: RuntimeManager, enable_cors: bool) -> Router {
             runtime,
             downloads: Arc::new(RwLock::new(restored_downloads)),
             storage: Arc::new(Mutex::new(storage)),
+            search_filters: Arc::new(RwLock::new(initial_search_filters)),
         }));
 
     if enable_cors {
@@ -440,6 +418,7 @@ struct HubSibling {
 }
 
 async fn huggingface_search(
+    State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
     Query(query): Query<HuggingFaceSearchQuery>,
 ) -> impl IntoResponse {
@@ -483,17 +462,18 @@ async fn huggingface_search(
             return (axum::http::StatusCode::BAD_GATEWAY, error.to_string()).into_response();
         }
     };
+    let blocked_keywords = state.search_filters.read().await.blocked_keywords.clone();
 
     let mut results: Vec<_> = models
         .into_iter()
-        .filter(|model| !is_blocked_model_text(&model.model_id))
+        .filter(|model| !is_blocked_model_text(&model.model_id, &blocked_keywords))
         .filter_map(|model| {
             let files: Vec<_> = model
                 .siblings
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|file| file.filename.to_ascii_lowercase().ends_with(".gguf"))
-                .filter(|file| !is_blocked_model_text(&file.filename))
+                .filter(|file| !is_blocked_model_text(&file.filename, &blocked_keywords))
                 .map(|file| HuggingFaceFileResult {
                     filename: file.filename,
                     size_bytes: file.size,
@@ -523,11 +503,44 @@ async fn huggingface_search(
     Json(results).into_response()
 }
 
-fn is_blocked_model_text(text: &str) -> bool {
+fn is_blocked_model_text(text: &str, blocked_keywords: &[String]) -> bool {
     let lower = text.to_ascii_lowercase();
-    BLOCKED_MODEL_KEYWORDS
+    blocked_keywords
         .iter()
-        .any(|keyword| lower.contains(keyword))
+        .map(|keyword| keyword.trim().to_ascii_lowercase())
+        .filter(|keyword| !keyword.is_empty())
+        .any(|keyword| lower.contains(&keyword))
+}
+
+async fn get_search_filters(State(state): State<Arc<ApiState>>) -> Json<SearchFiltersConfig> {
+    Json(state.search_filters.read().await.clone())
+}
+
+#[derive(Debug, Deserialize)]
+struct AddBlockedKeywordRequest {
+    keyword: String,
+}
+
+async fn add_blocked_keyword(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<AddBlockedKeywordRequest>,
+) -> impl IntoResponse {
+    let keyword = body.keyword.trim().to_ascii_lowercase();
+    if keyword.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, "keyword is required").into_response();
+    }
+
+    let mut filters = state.search_filters.write().await;
+    if !filters
+        .blocked_keywords
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&keyword))
+    {
+        filters.blocked_keywords.push(keyword);
+        filters.blocked_keywords.sort();
+    }
+
+    Json(filters.clone()).into_response()
 }
 
 #[derive(Debug, Deserialize)]

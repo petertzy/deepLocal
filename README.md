@@ -164,6 +164,22 @@ You can paste the token in the Settings page or set `HF_TOKEN` /
 `HUGGINGFACE_TOKEN` before starting the backend. Tokens are not stored in this
 repository.
 
+## Search Filters
+
+Hugging Face GGUF search uses a safe default blocked-keyword policy to hide
+models whose repository or file names match configured terms. You can inspect
+the active policy and add custom blocked keywords from the Settings page.
+
+Advanced users can customize the startup policy in a config file:
+
+```toml
+[search_filters]
+blocked_keywords = ["nsfw", "uncensored", "custom-term"]
+```
+
+Keep the safe defaults unless you intentionally want to change what appears in
+model search results.
+
 ## Project Layout
 
 ```text

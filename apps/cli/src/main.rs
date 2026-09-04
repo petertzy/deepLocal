@@ -60,7 +60,11 @@ async fn main() -> anyhow::Result<()> {
             let host = host.unwrap_or(config.server.host);
             let port = port.unwrap_or(config.server.port);
             warn_if_public_bind(&host);
-            let app = deeplocal_api::router_with_cors(runtime, config.server.enable_cors);
+            let app = deeplocal_api::router_with_options(
+                runtime,
+                config.server.enable_cors,
+                config.search_filters,
+            );
             let addr: SocketAddr = format!("{host}:{port}").parse()?;
             let listener = tokio::net::TcpListener::bind(addr).await?;
             println!("deepLocal API listening on http://{addr}");

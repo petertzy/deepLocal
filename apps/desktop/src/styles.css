@@ -1241,7 +1241,8 @@ label {
   align-content: start;
 }
 
-.authPanel {
+.authPanel,
+.filterPanel {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -1250,9 +1251,38 @@ label {
   padding: 14px;
 }
 
-.authPanel p {
+.authPanel p,
+.filterPanel p {
   color: #66727a;
   overflow-wrap: anywhere;
+}
+
+.keywordEditor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.keywordEditor button {
+  padding: 0 12px;
+  color: #ffffff;
+  background: #172026;
+}
+
+.keywordList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.keywordList span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #445057;
+  background: #eef2f1;
+  font-size: 12px;
 }
 
 @media (max-width: 960px) {
@@ -1339,6 +1369,7 @@ label {
   .loadOptions,
   .modelTools,
   .modelPath,
+  .keywordEditor,
   .composer,
   .searchRow,
   .sortControl,

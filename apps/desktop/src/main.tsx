@@ -112,6 +112,10 @@ type DiscoveredModelFile = {
   suggested_model_id: string;
 };
 
+type SearchFiltersConfig = {
+  blocked_keywords: string[];
+};
+
 type ModelLoadOptions = {
   context_length: number;
   gpu_layers: number;
@@ -1622,10 +1626,43 @@ function SettingsPanel({
   onNotice: (message: string) => void;
 }) {
   const [authMessage, setAuthMessage] = useState("Token not checked.");
+  const [searchFilters, setSearchFilters] = useState<SearchFiltersConfig | null>(null);
+  const [blockedKeyword, setBlockedKeyword] = useState("");
+
+  useEffect(() => {
+    refreshSearchFilters();
+  }, []);
 
   function updateToken(token: string) {
     window.localStorage.setItem("deeplocal:hf-token", token);
     onTokenChange(token);
+  }
+
+  async function refreshSearchFilters() {
+    try {
+      const res = await fetch(`${API_BASE}/runtime/search-filters`);
+      if (!res.ok) throw new Error(await res.text());
+      setSearchFilters(await res.json());
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Failed to load search filter policy.");
+    }
+  }
+
+  async function addBlockedKeyword() {
+    const keyword = blockedKeyword.trim();
+    if (!keyword) return;
+    const res = await fetch(`${API_BASE}/runtime/search-filters/blocked-keywords`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyword }),
+    });
+    if (res.ok) {
+      setSearchFilters(await res.json());
+      setBlockedKeyword("");
+      onNotice(`Added blocked keyword: ${keyword}.`);
+    } else {
+      onNotice(await res.text());
+    }
   }
 
   async function checkToken(repo?: string, filename?: string) {
@@ -1673,6 +1710,29 @@ function SettingsPanel({
           <button onClick={() => checkToken("google/gemma-3-1b-it-qat-q4_0-gguf", "gemma-3-1b-it-q4_0.gguf")}>
             Check Gemma
           </button>
+        </div>
+      </section>
+      <section className="filterPanel">
+        <div>
+          <h2>Search filter policy</h2>
+          <p>{searchFilters ? `${searchFilters.blocked_keywords.length} blocked keywords active.` : "Loading filter policy."}</p>
+        </div>
+        <div className="keywordEditor">
+          <input
+            placeholder="custom keyword"
+            value={blockedKeyword}
+            onChange={(event) => setBlockedKeyword(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && addBlockedKeyword()}
+          />
+          <button disabled={!blockedKeyword.trim()} onClick={addBlockedKeyword}>
+            <Plus size={15} />
+            Add
+          </button>
+        </div>
+        <div className="keywordList">
+          {(searchFilters?.blocked_keywords ?? []).map((keyword) => (
+            <span key={keyword}>{keyword}</span>
+          ))}
         </div>
       </section>
     </div>

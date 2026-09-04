@@ -3,10 +3,16 @@ use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeepLocalConfig {
+    #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
     pub models: ModelsConfig,
+    #[serde(default)]
     pub runtime: RuntimeConfig,
+    #[serde(default)]
     pub downloads: DownloadsConfig,
+    #[serde(default)]
+    pub search_filters: SearchFiltersConfig,
 }
 
 impl Default for DeepLocalConfig {
@@ -16,6 +22,7 @@ impl Default for DeepLocalConfig {
             models: ModelsConfig::default(),
             runtime: RuntimeConfig::default(),
             downloads: DownloadsConfig::default(),
+            search_filters: SearchFiltersConfig::default(),
         }
     }
 }
@@ -85,5 +92,56 @@ pub struct DownloadsConfig {
 impl Default for DownloadsConfig {
     fn default() -> Self {
         Self { max_parallel: 2 }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchFiltersConfig {
+    pub blocked_keywords: Vec<String>,
+}
+
+impl Default for SearchFiltersConfig {
+    fn default() -> Self {
+        Self {
+            blocked_keywords: [
+                "nsfw",
+                "uncensored",
+                "abliterated",
+                "abliteration",
+                "dolphin",
+                "erotic",
+                "porn",
+                "sex",
+                "roleplay",
+                "qwen",
+                "qwq",
+                "kimi",
+                "moonshot",
+                "deepseek",
+                "deepseek-ai",
+                "baichuan",
+                "yi-",
+                "01-ai",
+                "internlm",
+                "chatglm",
+                "glm",
+                "zhipu",
+                "hunyuan",
+                "tencent",
+                "alibaba",
+                "alipay",
+                "bytedance",
+                "doubao",
+                "minimax",
+                "stepfun",
+                "baidu",
+                "ernie",
+                "sparkdesk",
+                "iflytek",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        }
     }
 }

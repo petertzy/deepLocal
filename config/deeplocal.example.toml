@@ -13,3 +13,41 @@ idle_unload_minutes = 30
 
 [downloads]
 max_parallel = 2
+
+[search_filters]
+blocked_keywords = [
+  "nsfw",
+  "uncensored",
+  "abliterated",
+  "abliteration",
+  "dolphin",
+  "erotic",
+  "porn",
+  "sex",
+  "roleplay",
+  "qwen",
+  "qwq",
+  "kimi",
+  "moonshot",
+  "deepseek",
+  "deepseek-ai",
+  "baichuan",
+  "yi-",
+  "01-ai",
+  "internlm",
+  "chatglm",
+  "glm",
+  "zhipu",
+  "hunyuan",
+  "tencent",
+  "alibaba",
+  "alipay",
+  "bytedance",
+  "doubao",
+  "minimax",
+  "stepfun",
+  "baidu",
+  "ernie",
+  "sparkdesk",
+  "iflytek",
+]
