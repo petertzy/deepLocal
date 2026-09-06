@@ -22,10 +22,33 @@ model files to a remote service.
 
 ## Quick Start
 
-From the project root:
+From the project root on macOS or Linux:
 
 ```bash
 ./scripts/start-dev.sh
+```
+
+On Windows PowerShell (recommended; works even when `.ps1` files are blocked):
+
+```powershell
+.\scripts\start-dev.cmd
+```
+
+The first Windows launch automatically sets up the required development tools:
+
+- Node.js LTS is downloaded into the project's `.tools/node/` directory.
+- Rust and Cargo are installed for the current user with the official `rustup`
+  installer.
+- Microsoft C++ Build Tools are installed if missing. Windows may show one
+  administrator confirmation, and this larger installation can take several
+  minutes.
+- The newest official llama.cpp Windows CPU package for the system architecture is downloaded into
+  `.tools/llama.cpp/`, including `llama-server.exe` for local GGUF chat.
+
+To install the prerequisites without starting the app, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
 ```
 
 Then open:
@@ -47,15 +70,34 @@ Useful commands:
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
 
+Windows commands:
+
+```powershell
+.\scripts\start-dev.cmd -Restart
+.\scripts\start-dev.cmd -Stop
+.\scripts\start-dev.cmd -Build
+```
+
+You can also run the PowerShell script directly when local script execution is
+enabled:
+
+```powershell
+.\scripts\start-dev.ps1
+```
+
 Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
 `llama.cpp` after cleaning local project artifacts.
 
 ## Requirements
 
-- macOS is the best-tested development platform.
-- Rust toolchain with Cargo.
-- Node.js and npm.
-- `curl` and `lsof`.
+- Windows 10/11, macOS, or Linux. Use the platform-specific launcher above.
+- Rust toolchain with Cargo (automatically installed on Windows).
+- Node.js and npm (automatically installed project-locally on Windows).
+- Microsoft C++ Build Tools with the Desktop C++ workload on Windows
+  (automatically installed when missing).
+- llama.cpp with `llama-server` (automatically installed project-locally on
+  Windows).
+- `curl` and `lsof` (macOS/Linux launcher only).
 - Homebrew is recommended on macOS for automatic `llama.cpp` installation.
 
 If `llama-server` is already available in `PATH`, deepLocal uses it directly.
