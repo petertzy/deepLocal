@@ -12,6 +12,28 @@ RESTART=0
 STOP=0
 BUILD=0
 
+initialize_dependencies() {
+  export PATH="$ROOT_DIR/.tools/node/bin:$HOME/.cargo/bin:$PATH"
+  local local_llama
+  local_llama="$(find "$ROOT_DIR/.tools/llama.cpp" -type f -name llama-server -print -quit 2>/dev/null || true)"
+  if [[ -n "$local_llama" ]]; then
+    export DEEPLOCAL_LLAMA_SERVER="$local_llama"
+  fi
+
+  if ! command -v npm >/dev/null 2>&1 ||
+     ! command -v cargo >/dev/null 2>&1 ||
+     ! command -v lsof >/dev/null 2>&1 ||
+     ! command -v curl >/dev/null 2>&1 ||
+     [[ -z "${DEEPLOCAL_LLAMA_SERVER:-}${DEELOCAL_LLAMA_SERVER:-}${LLAMA_SERVER:-}" && "${DEEPLOCAL_SKIP_LLAMA_INSTALL:-}" != "1" ]]; then
+    echo "Required macOS/Linux development tools are missing."
+    echo "Starting the one-time automatic setup..."
+    bash "$ROOT_DIR/scripts/setup-unix.sh"
+    export PATH="$ROOT_DIR/.tools/node/bin:$HOME/.cargo/bin:$PATH"
+    local_llama="$(find "$ROOT_DIR/.tools/llama.cpp" -type f -name llama-server -print -quit 2>/dev/null || true)"
+    [[ -z "$local_llama" ]] || export DEEPLOCAL_LLAMA_SERVER="$local_llama"
+  fi
+}
+
 cleanup() {
   if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
     echo "Stopping backend runtime..."
@@ -110,6 +132,7 @@ elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+initialize_dependencies
 require_command npm
 
 if [[ "$BUILD" -eq 1 ]]; then

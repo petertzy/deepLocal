@@ -28,6 +28,18 @@ From the project root on macOS or Linux:
 ./scripts/start-dev.sh
 ```
 
+The first macOS/Linux launch also performs a one-time setup. Node.js and
+llama.cpp are installed under `.tools/`, Rust is installed for the current
+user with rustup, and missing Linux compiler utilities are installed through
+the detected system package manager. macOS may request confirmation for Apple
+Command Line Tools; Linux may request the user's `sudo` password.
+
+To install prerequisites without starting the app:
+
+```bash
+bash ./scripts/setup-unix.sh
+```
+
 On Windows PowerShell (recommended; works even when `.ps1` files are blocked):
 
 ```powershell
@@ -57,8 +69,8 @@ Then open:
 http://127.0.0.1:5173/
 ```
 
-The script starts both the backend and frontend. On macOS, it also tries to
-install `llama.cpp` with Homebrew if `llama-server` is missing.
+The script starts both the backend and frontend and installs missing local
+development dependencies on its first run.
 
 Useful commands:
 
@@ -97,8 +109,8 @@ Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
   (automatically installed when missing).
 - llama.cpp with `llama-server` (automatically installed project-locally on
   Windows).
-- `curl` and `lsof` (macOS/Linux launcher only).
-- Homebrew is recommended on macOS for automatic `llama.cpp` installation.
+- On Linux, a supported package manager: apt, dnf, yum, pacman, or zypper.
+- On macOS, Apple Command Line Tools (the setup script prompts when missing).
 
 If `llama-server` is already available in `PATH`, deepLocal uses it directly.
 
