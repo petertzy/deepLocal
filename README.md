@@ -29,8 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/petertzy/deepLocal/main/scripts/ins
 ```
 
 The installer downloads the latest GitHub Release, installs `deepLocal.app` to
-`~/Applications`, removes the macOS quarantine marker when possible, and opens
-the app.
+`/Applications`, removes the macOS quarantine marker when possible, and opens
+the app. macOS may ask for administrator permission when replacing or copying
+the app into `/Applications`.
 
 From the project root on macOS or Linux:
 

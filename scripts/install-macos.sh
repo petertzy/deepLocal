@@ -4,7 +4,7 @@ set -euo pipefail
 REPO="petertzy/deepLocal"
 APP_NAME="deepLocal"
 VERSION="${DEEPLOCAL_VERSION:-latest}"
-INSTALL_DIR="${DEEPLOCAL_INSTALL_DIR:-$HOME/Applications}"
+INSTALL_DIR="${DEEPLOCAL_INSTALL_DIR:-/Applications}"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -46,18 +46,47 @@ if [[ -z "$APP_PATH" ]]; then
   exit 1
 fi
 
-mkdir -p "$INSTALL_DIR"
 DEST_PATH="$INSTALL_DIR/$APP_NAME.app"
 
-if [[ -d "$DEST_PATH" ]]; then
-  echo "Replacing existing $DEST_PATH"
-  rm -rf "$DEST_PATH"
+install_app() {
+  mkdir -p "$INSTALL_DIR"
+
+  if [[ -d "$DEST_PATH" ]]; then
+    echo "Replacing existing $DEST_PATH"
+    rm -rf "$DEST_PATH"
+  fi
+
+  cp -R "$APP_PATH" "$DEST_PATH"
+}
+
+install_app_with_admin() {
+  local source_path
+  source_path="$(printf "%q" "$APP_PATH")"
+  local install_dir
+  install_dir="$(printf "%q" "$INSTALL_DIR")"
+  local destination_path
+  destination_path="$(printf "%q" "$DEST_PATH")"
+
+  osascript -e "do shell script \"mkdir -p $install_dir && rm -rf $destination_path && cp -R $source_path $destination_path\" with administrator privileges"
+}
+
+if ! install_app 2>/dev/null; then
+  if [[ "$INSTALL_DIR" == "/Applications" ]] && command -v osascript >/dev/null 2>&1; then
+    echo "Administrator permission is required to install to /Applications."
+    install_app_with_admin
+  else
+    echo "Could not install deepLocal to $INSTALL_DIR." >&2
+    echo "Try setting DEEPLOCAL_INSTALL_DIR to a writable folder." >&2
+    exit 1
+  fi
 fi
 
-cp -R "$APP_PATH" "$DEST_PATH"
-
 if command -v xattr >/dev/null 2>&1; then
-  xattr -dr com.apple.quarantine "$DEST_PATH" 2>/dev/null || true
+  xattr -dr com.apple.quarantine "$DEST_PATH" 2>/dev/null || {
+    if [[ "$INSTALL_DIR" == "/Applications" ]] && command -v osascript >/dev/null 2>&1; then
+      osascript -e "do shell script \"xattr -dr com.apple.quarantine $(printf "%q" "$DEST_PATH")\" with administrator privileges" >/dev/null 2>&1 || true
+    fi
+  }
 fi
 
 echo "Installed deepLocal:"
