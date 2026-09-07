@@ -53,7 +53,9 @@ fi
 mkdir -p "$TOOLS_DIR" "$DOWNLOADS_DIR"
 
 NODE_DIR="$TOOLS_DIR/node"
-if [[ ! -x "$NODE_DIR/bin/node" ]]; then
+if [[ -x "$NODE_DIR/bin/node" ]]; then
+  export PATH="$NODE_DIR/bin:$PATH"
+elif ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
   [[ "$OS" == "Darwin" ]] && node_platform="darwin" || node_platform="linux"
   node_archive="node-v${NODE_VERSION}-${node_platform}-${ARCH}.tar.gz"
   echo "Downloading Node.js $NODE_VERSION..."
@@ -67,8 +69,9 @@ if [[ ! -x "$NODE_DIR/bin/node" ]]; then
   rm -rf "$NODE_DIR" "$DOWNLOADS_DIR/${node_archive%.tar.gz}"
   tar -xzf "$DOWNLOADS_DIR/$node_archive" -C "$DOWNLOADS_DIR"
   mv "$DOWNLOADS_DIR/${node_archive%.tar.gz}" "$NODE_DIR"
+  export PATH="$NODE_DIR/bin:$PATH"
 fi
-export PATH="$NODE_DIR/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "Installing Rust and Cargo for the current user..."
@@ -78,7 +81,11 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 LLAMA_DIR="$TOOLS_DIR/llama.cpp"
-if [[ ! -x "$LLAMA_DIR/llama-server" && "${DEEPLOCAL_SKIP_LLAMA_INSTALL:-}" != "1" ]]; then
+if [[ -x "$LLAMA_DIR/llama-server" ]]; then
+  export DEEPLOCAL_LLAMA_SERVER="$LLAMA_DIR/llama-server"
+elif command -v llama-server >/dev/null 2>&1; then
+  export DEEPLOCAL_LLAMA_SERVER="$(command -v llama-server)"
+elif [[ "${DEEPLOCAL_SKIP_LLAMA_INSTALL:-}" != "1" ]]; then
   [[ "$OS" == "Darwin" ]] && llama_platform="macos" || llama_platform="ubuntu"
   asset_url="$(node - "$llama_platform" "$ARCH" <<'NODE'
 const [platform, arch] = process.argv.slice(2);
@@ -104,6 +111,7 @@ NODE
   llama_server="$(find "$LLAMA_DIR" -type f -name llama-server -print -quit)"
   [[ -n "$llama_server" ]] || { echo "llama-server was not found in the downloaded package."; exit 1; }
   chmod +x "$llama_server"
+  export DEEPLOCAL_LLAMA_SERVER="$llama_server"
 fi
 
 echo "Unix dependencies are ready:"
@@ -111,5 +119,5 @@ node --version
 npm --version
 cargo --version
 if [[ "${DEEPLOCAL_SKIP_LLAMA_INSTALL:-}" != "1" ]]; then
-  find "$LLAMA_DIR" -type f -name llama-server -print -quit
+  echo "${DEEPLOCAL_LLAMA_SERVER:-$(find "$LLAMA_DIR" -type f -name llama-server -print -quit)}"
 fi

@@ -18,6 +18,9 @@ initialize_dependencies() {
   local_llama="$(find "$ROOT_DIR/.tools/llama.cpp" -type f -name llama-server -print -quit 2>/dev/null || true)"
   if [[ -n "$local_llama" ]]; then
     export DEEPLOCAL_LLAMA_SERVER="$local_llama"
+  elif [[ -z "${DEEPLOCAL_LLAMA_SERVER:-}${DEELOCAL_LLAMA_SERVER:-}${LLAMA_SERVER:-}" ]] &&
+       command -v llama-server >/dev/null 2>&1; then
+    export DEEPLOCAL_LLAMA_SERVER="$(command -v llama-server)"
   fi
 
   if ! command -v npm >/dev/null 2>&1 ||
@@ -30,7 +33,11 @@ initialize_dependencies() {
     bash "$ROOT_DIR/scripts/setup-unix.sh"
     export PATH="$ROOT_DIR/.tools/node/bin:$HOME/.cargo/bin:$PATH"
     local_llama="$(find "$ROOT_DIR/.tools/llama.cpp" -type f -name llama-server -print -quit 2>/dev/null || true)"
-    [[ -z "$local_llama" ]] || export DEEPLOCAL_LLAMA_SERVER="$local_llama"
+    if [[ -n "$local_llama" ]]; then
+      export DEEPLOCAL_LLAMA_SERVER="$local_llama"
+    elif command -v llama-server >/dev/null 2>&1; then
+      export DEEPLOCAL_LLAMA_SERVER="$(command -v llama-server)"
+    fi
   fi
 }
 
