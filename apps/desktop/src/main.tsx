@@ -738,6 +738,7 @@ function Models({
   const [query, setQuery] = useState("Gemma 3 1b");
   const [results, setResults] = useState<HuggingFaceResult[]>([]);
   const [sortBy, setSortBy] = useState<SearchSort>("downloads");
+  const [showAuxiliaryFiles, setShowAuxiliaryFiles] = useState(false);
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
@@ -1027,7 +1028,13 @@ function Models({
   const detailsModel = models.find((model) => model.id === detailsModelId) ?? null;
   const detailsHandle = detailsModel ? loaded.find((item) => item.id === detailsModel.id) ?? null : null;
   const detailsPath = detailsModel ? resolveModelPath(detailsModel.local_path, modelsDirectory) : null;
-  const sortedFiles = useMemo(() => sortSearchFiles(flattenSearchResults(results), sortBy), [results, sortBy]);
+  const allSearchFiles = useMemo(() => flattenSearchResults(results), [results]);
+  const auxiliaryFileCount = useMemo(() => allSearchFiles.filter(isAuxiliaryModelFile).length, [allSearchFiles]);
+  const visibleSearchFiles = useMemo(
+    () => (showAuxiliaryFiles ? allSearchFiles : allSearchFiles.filter((file) => !isAuxiliaryModelFile(file))),
+    [allSearchFiles, showAuxiliaryFiles],
+  );
+  const sortedFiles = useMemo(() => sortSearchFiles(visibleSearchFiles, sortBy), [visibleSearchFiles, sortBy]);
 
   return (
     <div className="pane">
@@ -1100,11 +1107,22 @@ function Models({
               <option value="name">Name</option>
             </select>
           </label>
+          <label className="auxiliaryToggle">
+            <input
+              type="checkbox"
+              checked={showAuxiliaryFiles}
+              onChange={(event) => setShowAuxiliaryFiles(event.target.checked)}
+            />
+            <span>Show auxiliary files</span>
+          </label>
           <button onClick={searchHuggingFace}>
             <Download size={16} />
             Search
           </button>
         </div>
+        {!showAuxiliaryFiles && auxiliaryFileCount > 0 && (
+          <p className="filterHint">{auxiliaryFileCount} auxiliary files hidden: mmproj and mtp files are not primary chat models.</p>
+        )}
         <div className="searchResults">
           {!results.length && (
             <EmptyState
@@ -1127,6 +1145,7 @@ function Models({
                 <div className="modelFileMeta">
                   <span>{formatFileSize(file.size_bytes)}</span>
                   <span>{modelQuantizationLabel(file.filename)}</span>
+                  {isAuxiliaryModelFile(file) && <span>auxiliary file</span>}
                   <span>{file.downloads ?? 0} source downloads</span>
                   <span>{file.likes ?? 0} source likes</span>
                 </div>
@@ -1851,6 +1870,11 @@ function flattenSearchResults(results: HuggingFaceResult[]) {
       likes: result.likes,
     })),
   );
+}
+
+function isAuxiliaryModelFile(file: HuggingFaceModelFile) {
+  const filename = file.filename.toLowerCase();
+  return filename.startsWith("mmproj-") || filename.startsWith("mtp-");
 }
 
 function sortSearchFiles(files: HuggingFaceModelFile[], sortBy: SearchSort) {

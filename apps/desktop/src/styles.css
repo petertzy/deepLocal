@@ -559,17 +559,39 @@ article p {
 }
 
 .searchRow {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
 
+.auxiliaryToggle,
 .sortControl {
   display: grid;
-  grid-template-columns: auto 210px;
   align-items: center;
   gap: 8px;
 }
 
+.sortControl {
+  grid-template-columns: auto 210px;
+}
+
+.auxiliaryToggle {
+  grid-template-columns: auto auto;
+  min-height: 38px;
+  color: #66727a;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.auxiliaryToggle input {
+  width: 16px;
+  height: 16px;
+}
+
 .sortControl span {
+  color: #66727a;
+  font-size: 13px;
+}
+
+.filterHint {
   color: #66727a;
   font-size: 13px;
 }
@@ -1372,6 +1394,7 @@ label {
   .keywordEditor,
   .composer,
   .searchRow,
+  .auxiliaryToggle,
   .sortControl,
   .downloadActions,
   .emptyState {
