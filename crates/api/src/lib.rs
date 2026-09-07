@@ -182,15 +182,10 @@ async fn register_model(
     State(state): State<Arc<ApiState>>,
     Json(model): Json<ModelDescriptor>,
 ) -> impl IntoResponse {
-    if state.runtime.get_model(&model.id).await.is_some() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            format!("Model id already exists: {}", model.id),
-        )
-            .into_response();
-    }
-    let model = model_with_local_size(absolutize_model_paths(model));
-    state.runtime.register_model(model.clone()).await;
+    let model = match register_model_descriptor(&state.runtime, model).await {
+        Ok(model) => model,
+        Err(response) => return response,
+    };
     (axum::http::StatusCode::CREATED, Json(model)).into_response()
 }
 
@@ -767,11 +762,12 @@ async fn huggingface_auth_check(
 mod tests {
     use super::{
         HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, apply_huggingface_sizes,
-        calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
-        model_id_from_filename, openai_model_data, range_header, remove_empty_models_subdirectory,
-        unique_model_id,
+        calculate_eta_seconds, find_model_by_local_path, is_download_history, is_gguf_header,
+        is_inside_models_root, model_id_from_filename, openai_model_data, range_header,
+        register_model_descriptor, remove_empty_models_subdirectory, unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
+    use deeplocal_runtime::RuntimeManager;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -855,6 +851,42 @@ mod tests {
         let mut used = HashSet::from(["gemma".to_string(), "gemma-2".to_string()]);
         assert_eq!(unique_model_id("gemma", &mut used), "gemma-3");
         assert!(used.contains("gemma-3"));
+    }
+
+    #[tokio::test]
+    async fn local_model_paths_match_after_normalization() {
+        let runtime = RuntimeManager::default();
+        runtime
+            .register_model(ModelDescriptor::local_gguf(
+                "gemma",
+                "./models/gemma/model.gguf",
+            ))
+            .await;
+
+        let path = super::models_root().join("gemma/model.gguf");
+        let found = find_model_by_local_path(&runtime, &path.to_string_lossy()).await;
+
+        assert_eq!(found.expect("registered path").id, "gemma");
+    }
+
+    #[tokio::test]
+    async fn registering_duplicate_local_path_is_rejected() {
+        let runtime = RuntimeManager::default();
+        runtime
+            .register_model(ModelDescriptor::local_gguf(
+                "gemma",
+                "./models/gemma/model.gguf",
+            ))
+            .await;
+
+        let duplicate =
+            ModelDescriptor::local_gguf("gemma-copy", "./models/gemma/../gemma/model.gguf");
+        let response = register_model_descriptor(&runtime, duplicate)
+            .await
+            .expect_err("duplicate path should be rejected");
+
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+        assert_eq!(runtime.list_models().await.len(), 1);
     }
 
     #[test]
@@ -1350,6 +1382,46 @@ fn model_with_local_size(mut model: ModelDescriptor) -> ModelDescriptor {
     model
 }
 
+async fn register_model_descriptor(
+    runtime: &RuntimeManager,
+    model: ModelDescriptor,
+) -> Result<ModelDescriptor, axum::response::Response> {
+    if runtime.get_model(&model.id).await.is_some() {
+        return Err((
+            axum::http::StatusCode::CONFLICT,
+            format!("Model id already exists: {}", model.id),
+        )
+            .into_response());
+    }
+
+    let model = model_with_local_size(absolutize_model_paths(model));
+    if let Some(path) = model.local_path.as_deref() {
+        if let Some(existing) = find_model_by_local_path(runtime, path).await {
+            return Err((
+                axum::http::StatusCode::CONFLICT,
+                format!("Model file is already registered as: {}", existing.id),
+            )
+                .into_response());
+        }
+    }
+
+    runtime.register_model(model.clone()).await;
+    Ok(model)
+}
+
+async fn find_model_by_local_path(
+    runtime: &RuntimeManager,
+    local_path: &str,
+) -> Option<ModelDescriptor> {
+    let local_path = absolute_path_string(local_path);
+    runtime.list_models().await.into_iter().find(|model| {
+        model
+            .local_path
+            .as_deref()
+            .is_some_and(|path| absolute_path_string(path) == local_path)
+    })
+}
+
 fn absolute_path_string(path: &str) -> String {
     absolute_path(PathBuf::from(path))
         .to_string_lossy()
@@ -1607,7 +1679,12 @@ async fn download_huggingface_file(
     descriptor.source = "huggingface".to_string();
     descriptor.repo = Some(body.repo.clone());
     descriptor.size_bytes = total;
-    runtime.register_model(descriptor).await;
+    if find_model_by_local_path(&runtime, &local_path.to_string_lossy())
+        .await
+        .is_none()
+    {
+        runtime.register_model(descriptor).await;
+    }
 
     let mut jobs = downloads.write().await;
     if let Some(job) = jobs.get_mut(&job_id) {
