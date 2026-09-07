@@ -7,7 +7,7 @@ It pairs a Rust local runtime with a React desktop-style UI. The goal is simple:
 make local AI easier to run, inspect, and integrate without sending prompts or
 model files to a remote service.
 
-<img width="1440" height="621" alt="deepLocal desktop UI" src="https://github.com/user-attachments/assets/dca8f98c-2f08-451a-bf77-9df5db2191d1" />
+<img width="1436" height="625" alt="Image" src="https://github.com/user-attachments/assets/07ee40fd-71bb-46da-8005-76d4d0c07ce7" />
 
 ## Features
 
