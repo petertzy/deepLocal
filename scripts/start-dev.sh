@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
-BACKEND_PORT="${DEELOCAL_BACKEND_PORT:-14567}"
-FRONTEND_PORT="${DEELOCAL_FRONTEND_PORT:-5173}"
+BACKEND_PORT="${DEEPLOCAL_BACKEND_PORT:-${DEELOCAL_BACKEND_PORT:-14567}}"
+FRONTEND_PORT="${DEEPLOCAL_FRONTEND_PORT:-${DEELOCAL_FRONTEND_PORT:-5173}}"
 BACKEND_PID=""
 BACKEND_ALREADY_RUNNING=0
 FRONTEND_ALREADY_RUNNING=0
@@ -124,10 +124,11 @@ elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: ./scripts/start-dev.sh [--restart|--stop|--build]"
   echo
   echo "Starts the deepLocal backend and frontend development servers."
-  echo "Installs llama.cpp automatically on macOS with Homebrew if llama-server is missing."
+  echo "Runs scripts/setup-unix.sh automatically when Node.js, Rust, or llama.cpp is missing."
   echo "Use --restart to stop existing processes on ports $BACKEND_PORT and $FRONTEND_PORT first."
   echo "Use --stop to stop processes on ports $BACKEND_PORT and $FRONTEND_PORT."
   echo "Use --build to run the desktop frontend production build from the project root."
+  echo "Set DEEPLOCAL_BACKEND_PORT or DEEPLOCAL_FRONTEND_PORT to override default ports."
   echo "Set DEEPLOCAL_SKIP_LLAMA_INSTALL=1 to skip automatic llama.cpp installation."
   exit 0
 fi
