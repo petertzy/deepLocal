@@ -22,6 +22,16 @@ model files to a remote service.
 
 ## Quick Start
 
+Install the latest macOS app:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/petertzy/deepLocal/main/scripts/install-macos.sh | bash
+```
+
+The installer downloads the latest GitHub Release, installs `deepLocal.app` to
+`~/Applications`, removes the macOS quarantine marker when possible, and opens
+the app.
+
 From the project root on macOS or Linux:
 
 ```bash
@@ -78,6 +88,7 @@ Useful commands:
 ./scripts/start-dev.sh --restart
 ./scripts/start-dev.sh --stop
 ./scripts/start-dev.sh --build
+./scripts/install-macos.sh
 ./scripts/package-macos-app.sh
 ./scripts/uninstall-local.sh
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
