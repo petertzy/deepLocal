@@ -359,6 +359,7 @@ async fn delete_model(
     };
 
     let mut deleted_file = false;
+    let mut deleted_directory = false;
     if body.delete_file {
         if let Some(path) = model.local_path.as_deref() {
             match std::fs::remove_file(path) {
@@ -372,13 +373,15 @@ async fn delete_model(
                         .into_response();
                 }
             }
+            deleted_directory = remove_empty_models_subdirectory(path).unwrap_or(false);
         }
     }
 
     Json(serde_json::json!({
         "status": "deleted",
         "model_id": body.model_id,
-        "deleted_file": deleted_file
+        "deleted_file": deleted_file,
+        "deleted_directory": deleted_directory
     }))
     .into_response()
 }
@@ -765,7 +768,8 @@ mod tests {
     use super::{
         HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, apply_huggingface_sizes,
         calculate_eta_seconds, is_download_history, is_gguf_header, is_inside_models_root,
-        model_id_from_filename, openai_model_data, range_header, unique_model_id,
+        model_id_from_filename, openai_model_data, range_header, remove_empty_models_subdirectory,
+        unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use std::collections::{HashMap, HashSet};
@@ -819,6 +823,22 @@ mod tests {
     fn model_delete_paths_must_stay_inside_models_root() {
         assert!(is_inside_models_root("./models/example/model.gguf"));
         assert!(!is_inside_models_root("../outside/model.gguf"));
+    }
+
+    #[test]
+    fn model_delete_removes_empty_model_subdirectory() {
+        let root = super::models_root();
+        let directory = root.join(format!("delete-empty-test-{}", uuid::Uuid::new_v4()));
+        let file = directory.join("model.gguf");
+        std::fs::create_dir_all(&directory).expect("create test directory");
+        std::fs::write(&file, b"GGUF").expect("write test file");
+        std::fs::remove_file(&file).expect("remove test file");
+
+        let removed = remove_empty_models_subdirectory(&file.to_string_lossy())
+            .expect("remove empty model directory");
+
+        assert!(removed);
+        assert!(!directory.exists());
     }
 
     #[test]
@@ -1059,6 +1079,13 @@ async fn discard_download(
     if let Some(local_path) = job.local_path.as_deref() {
         let partial_path = partial_download_path(&PathBuf::from(local_path));
         let _ = tokio::fs::remove_file(partial_path).await;
+        if let Some(parent) = PathBuf::from(local_path).parent().map(PathBuf::from) {
+            let models_root = models_root();
+            let parent = absolute_path(parent);
+            if parent != models_root && parent.starts_with(models_root) {
+                let _ = tokio::fs::remove_dir(parent).await;
+            }
+        }
     }
 
     let storage = state.storage.lock().await;
@@ -1268,6 +1295,24 @@ fn is_inside_models_root(path: &str) -> bool {
     let models_root = models_root();
     let path = absolute_path(PathBuf::from(path));
     path.starts_with(models_root)
+}
+
+fn remove_empty_models_subdirectory(path: &str) -> std::io::Result<bool> {
+    let models_root = models_root();
+    let path = absolute_path(PathBuf::from(path));
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    if parent == models_root || !parent.starts_with(&models_root) {
+        return Ok(false);
+    }
+
+    match std::fs::remove_dir(parent) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn absolutize_model_paths(mut model: ModelDescriptor) -> ModelDescriptor {
