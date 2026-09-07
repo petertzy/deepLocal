@@ -175,6 +175,23 @@ function App() {
   const [modelsDirectory, setModelsDirectory] = useState("./models");
   const [hfToken, setHfToken] = useState(() => window.localStorage.getItem("deeplocal:hf-token") ?? "");
   const [notice, setNotice] = useState("Start the API with `cargo run -p deeplocal -- serve`.");
+  const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
+  const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
+
+  function loadOptionsForModel(modelId: string) {
+    return sanitizeLoadOptions(loadOptionsByModel[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
+  }
+
+  function updateLoadOption(modelId: string, field: keyof ModelLoadOptions, value: string) {
+    const numericValue = Number(value);
+    setLoadOptionsByModel((current) => {
+      const currentOptions = sanitizeLoadOptions(current[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
+      const nextOptions = sanitizeLoadOptions({ ...currentOptions, [field]: numericValue }, fallbackLoadOptions);
+      const next = { ...current, [modelId]: nextOptions };
+      writeStoredModelLoadOptions(next);
+      return next;
+    });
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -268,15 +285,25 @@ function App() {
         </header>
 
         {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => setTab("models")} />}
-        {tab === "chat" && <Chat loaded={loaded} onOpenModels={() => setTab("models")} onNotice={setNotice} />}
+        {tab === "chat" && (
+          <Chat
+            models={models}
+            loaded={loaded}
+            loadOptionsForModel={loadOptionsForModel}
+            onOpenModels={() => setTab("models")}
+            onNotice={setNotice}
+            onRefresh={refresh}
+          />
+        )}
         {tab === "models" && (
           <Models
             models={models}
             loaded={loaded}
             downloads={downloads}
-            hardware={hardware}
             modelsDirectory={modelsDirectory}
             hfToken={hfToken}
+            loadOptionsForModel={loadOptionsForModel}
+            updateLoadOption={updateLoadOption}
             onNotice={setNotice}
             onRefresh={refresh}
           />
@@ -347,18 +374,47 @@ function ProgressItem({ done, title, detail }: { done?: boolean; title: string; 
   );
 }
 
-function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpenModels: () => void; onNotice: (message: string) => void }) {
+function Chat({
+  models,
+  loaded,
+  loadOptionsForModel,
+  onOpenModels,
+  onNotice,
+  onRefresh,
+}: {
+  models: ModelDescriptor[];
+  loaded: LoadedModel[];
+  loadOptionsForModel: (modelId: string) => ModelLoadOptions;
+  onOpenModels: () => void;
+  onNotice: (message: string) => void;
+  onRefresh: () => Promise<void>;
+}) {
   const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState(() => window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) ?? "");
   const [showConversationList, setShowConversationList] = useState(false);
   const [streaming, setStreaming] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
-  const conversationModel = activeConversation?.model_id ?? activeModel;
+  const registeredModelIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
+  const selectableModels = useMemo(() => {
+    const loadedOnly = loaded
+      .filter((model) => !registeredModelIds.has(model.id))
+      .map((model) => ({ id: model.id, name: model.id }));
+    return [...models.map((model) => ({ id: model.id, name: model.name || model.id })), ...loadedOnly].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+  }, [loaded, models, registeredModelIds]);
+  const conversationModel = activeConversation?.model_id ?? selectedModelId ?? activeModel;
+  const modelOptions = useMemo(() => {
+    if (!conversationModel || selectableModels.some((model) => model.id === conversationModel)) return selectableModels;
+    return [{ id: conversationModel, name: conversationModel }, ...selectableModels];
+  }, [conversationModel, selectableModels]);
   const messages = activeConversation?.messages ?? [];
 
   const refreshConversations = useCallback(async () => {
@@ -387,6 +443,17 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
     if (transcript) transcript.scrollTop = transcript.scrollHeight;
   }, [activeConversationId, messages.length, messages.at(-1)?.content]);
 
+  useEffect(() => {
+    const nextModelId = activeConversation?.model_id ?? selectedModelId;
+    if (nextModelId && nextModelId !== selectedModelId) {
+      setSelectedModelId(nextModelId);
+    } else if (!selectedModelId && activeModel) {
+      setSelectedModelId(activeModel);
+    } else if (!selectedModelId && modelOptions[0]) {
+      setSelectedModelId(modelOptions[0].id);
+    }
+  }, [activeConversation?.model_id, activeModel, modelOptions, selectedModelId]);
+
   function selectConversation(id: string) {
     setActiveConversationId(id);
     window.localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, id);
@@ -401,9 +468,10 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
       return;
     }
 
-    setInput("");
     setIsGenerating(true);
     try {
+      await ensureModelLoaded(conversationModel);
+      setInput("");
       const conversation = activeConversation ?? (await createConversation(titleFromPrompt(prompt), conversationModel));
       selectConversation(conversation.id);
       if (!conversation.model_id) {
@@ -487,7 +555,47 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
     abortRef.current?.abort();
   }
 
-  async function createConversation(title = "New conversation", modelId = activeModel ?? null) {
+  async function selectModel(modelId: string) {
+    setSelectedModelId(modelId);
+    try {
+      await ensureModelLoaded(modelId);
+      if (activeConversation) {
+        await updateConversationModel(activeConversation.id, modelId);
+        setConversations((items) =>
+          items.map((conversation) =>
+            conversation.id === activeConversation.id
+              ? { ...conversation, model_id: modelId, updated_at: new Date().toISOString() }
+              : conversation,
+          ),
+        );
+      }
+      onNotice(`Using ${modelId}.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : `Failed to load ${modelId}.`);
+      await onRefresh();
+    }
+  }
+
+  async function ensureModelLoaded(modelId: string) {
+    if (loaded.some((model) => model.id === modelId)) return;
+    const model = models.find((item) => item.id === modelId);
+    if (!model) throw new Error(`Model is not registered: ${modelId}`);
+    setLoadingModelId(modelId);
+    try {
+      const options = loadOptionsForModel(modelId);
+      const res = await fetch(`${API_BASE}/runtime/models/load`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model_id: modelId, backend: "llama.cpp", ...options }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await onRefresh();
+    } finally {
+      setLoadingModelId(null);
+    }
+  }
+
+  async function createConversation(title = "New conversation", modelId = selectedModelId || activeModel || null) {
     const res = await fetch(`${API_BASE}/runtime/chat/conversations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -579,10 +687,24 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
           </button>
           <div className="chatTitle">
             <h2>{activeConversation?.title ?? "Chat"}</h2>
-            <span title={conversationModel ?? "No model loaded"}>
+            <label className="chatModelPicker" title={conversationModel ?? "No model loaded"}>
               <Boxes size={16} />
-              {conversationModel ?? "No model loaded"}
-            </span>
+              <select
+                disabled={isGenerating || loadingModelId !== null || modelOptions.length === 0}
+                value={conversationModel ?? ""}
+                onChange={(event) => selectModel(event.target.value)}
+              >
+                {modelOptions.length ? (
+                  modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name} {loaded.some((item) => item.id === model.id) ? "(loaded)" : "(load on select)"}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No downloaded models</option>
+                )}
+              </select>
+            </label>
           </div>
           <div className="chatActions">
             <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && renameConversation(activeConversation)}>
@@ -594,7 +716,13 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
           </div>
         </div>
         <div className="transcript" ref={transcriptRef}>
-          {!messages.length && !conversationModel ? (
+          {loadingModelId ? (
+            <EmptyState
+              icon={<Boxes size={24} />}
+              title={`Loading ${loadingModelId}`}
+              description="The selected local model is starting now."
+            />
+          ) : !messages.length && !conversationModel ? (
             <EmptyState
               icon={<MessageSquare size={24} />}
               title="Load a model to start chatting"
@@ -674,7 +802,7 @@ function Chat({ loaded, onOpenModels, onNotice }: { loaded: LoadedModel[]; onOpe
               Stop
             </button>
           ) : (
-            <button disabled={!conversationModel} onClick={send}>
+            <button disabled={!conversationModel || loadingModelId !== null} onClick={send}>
               Send
             </button>
           )}
@@ -718,18 +846,20 @@ function Models({
   models,
   loaded,
   downloads,
-  hardware,
   modelsDirectory,
   hfToken,
+  loadOptionsForModel,
+  updateLoadOption,
   onNotice,
   onRefresh,
 }: {
   models: ModelDescriptor[];
   loaded: LoadedModel[];
   downloads: DownloadJob[];
-  hardware: HardwareProfile | null;
   modelsDirectory: string;
   hfToken: string;
+  loadOptionsForModel: (modelId: string) => ModelLoadOptions;
+  updateLoadOption: (modelId: string, field: keyof ModelLoadOptions, value: string) => void;
   onNotice: (message: string) => void;
   onRefresh: () => Promise<void>;
 }) {
@@ -742,10 +872,8 @@ function Models({
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
-  const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
   const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>([]);
   const [rescanning, setRescanning] = useState(false);
-  const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
 
   const downloadByFile = useMemo(() => {
     const items = new Map<string, DownloadJob>();
@@ -833,24 +961,6 @@ function Models({
     });
     onNotice(res.ok ? `Loaded ${modelId}.` : await res.text());
     await onRefresh();
-  }
-
-  function loadOptionsForModel(modelId: string) {
-    return sanitizeLoadOptions(loadOptionsByModel[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
-  }
-
-  function updateLoadOption(modelId: string, field: keyof ModelLoadOptions, value: string) {
-    const numericValue = Number(value);
-    setLoadOptionsByModel((current) => {
-      const currentOptions = sanitizeLoadOptions(current[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
-      const nextOptions = sanitizeLoadOptions(
-        { ...currentOptions, [field]: numericValue },
-        fallbackLoadOptions,
-      );
-      const next = { ...current, [modelId]: nextOptions };
-      writeStoredModelLoadOptions(next);
-      return next;
-    });
   }
 
   async function unload(modelId: string) {

@@ -930,6 +930,26 @@ progress {
   white-space: nowrap;
 }
 
+.chatModelPicker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 360px);
+  align-items: center;
+  gap: 7px;
+  width: min(100%, 420px);
+  color: #66727a;
+  font-size: 13px;
+}
+
+.chatModelPicker select {
+  min-height: 30px;
+  padding: 0 26px 0 8px;
+  overflow: hidden;
+  border-color: #dde2e4;
+  color: #445057;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
 .chatActions {
   display: flex;
   gap: 8px;
@@ -1397,6 +1417,7 @@ label {
   .auxiliaryToggle,
   .sortControl,
   .downloadActions,
+  .chatModelPicker,
   .emptyState {
     grid-template-columns: 1fr;
   }
