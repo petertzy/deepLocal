@@ -78,6 +78,7 @@ Useful commands:
 ./scripts/start-dev.sh --restart
 ./scripts/start-dev.sh --stop
 ./scripts/start-dev.sh --build
+./scripts/package-macos-app.sh
 ./scripts/uninstall-local.sh
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
@@ -99,6 +100,41 @@ enabled:
 
 Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
 `llama.cpp` after cleaning local project artifacts.
+
+## Packaging A macOS App
+
+Build a shareable Tauri macOS app from the project root:
+
+```bash
+./scripts/package-macos-app.sh
+```
+
+The script creates:
+
+```text
+dist/deepLocal.app
+dist/deepLocal-macos.zip
+```
+
+When macOS allows disk image creation in the current environment, the script also
+creates `dist/deepLocal-macos.dmg`.
+
+The packaged app is a native Tauri shell around the existing React UI. It starts
+the local Rust API inside the app process instead of opening a browser window.
+When `LLAMA_SERVER` or `DEEPLOCAL_LLAMA_SERVER` is set, deepLocal uses that
+binary. On macOS, the app also checks the common Homebrew locations
+`/opt/homebrew/bin/llama-server` and `/usr/local/bin/llama-server`.
+
+At runtime, the app stores user data under:
+
+```text
+~/Library/Application Support/deepLocal
+```
+
+That folder contains the SQLite database, logs, and downloaded models. The app
+still binds only to `127.0.0.1` by default. Release builds are unsigned unless
+you configure Apple Developer signing and notarization, so macOS Gatekeeper may
+warn on first launch.
 
 ## Requirements
 

@@ -1,0 +1,19 @@
+[package]
+name = "deeplocal-desktop"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+deeplocal-api = { path = "../../../crates/api" }
+deeplocal-core = { path = "../../../crates/core" }
+deeplocal-runtime = { path = "../../../crates/runtime" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
