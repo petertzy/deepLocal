@@ -15,6 +15,7 @@ import {
   Download,
   FolderOpen,
   Info,
+  LoaderCircle,
   MessageSquare,
   Pencil,
   Plus,
@@ -89,6 +90,20 @@ type HuggingFaceModelFile = {
   size_bytes?: number | null;
   downloads?: number | null;
   likes?: number | null;
+};
+
+const anonymousAccessLabels = {
+  public: "Anonymous download",
+  authentication_required: "Sign-in required",
+  restricted: "Access restricted",
+  not_found: "Not found / private",
+  unknown: "Check failed",
+};
+
+type AnonymousAccessCheck = {
+  pending: boolean;
+  status: keyof typeof anonymousAccessLabels;
+  message: string;
 };
 
 type DownloadJob = {
@@ -874,6 +889,28 @@ function Models({
   const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
   const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>([]);
   const [rescanning, setRescanning] = useState(false);
+  const [accessChecks, setAccessChecks] = useState<Record<string, AnonymousAccessCheck>>({});
+
+  async function checkAnonymousAccess(repo: string, filename: string) {
+    const key = downloadKey(repo, filename);
+    setAccessChecks((current) => ({ ...current, [key]: { pending: true, status: "unknown", message: "Checking anonymous access..." } }));
+    let message: string;
+    let status: AnonymousAccessCheck["status"] = "unknown";
+    try {
+      const response = await fetch(`${API_BASE}/runtime/huggingface/anonymous-access`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repo, filename }),
+      });
+      if (!response.ok) throw new Error("Access check failed");
+      const result = await response.json();
+      message = result.message;
+      if (Object.hasOwn(anonymousAccessLabels, result.status)) status = result.status;
+    } catch {
+      message = "Access check failed. Check your connection and try again.";
+    }
+    setAccessChecks((current) => ({ ...current, [key]: { pending: false, status, message } }));
+  }
 
   const downloadByFile = useMemo(() => {
     const items = new Map<string, DownloadJob>();
@@ -1013,7 +1050,14 @@ function Models({
     const res = await fetch(`${API_BASE}/runtime/huggingface/download`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repo, filename, model_id: modelId, size_bytes: sizeBytes ?? null, token: hfToken || null }),
+      body: JSON.stringify({
+        repo,
+        filename,
+        model_id: modelId,
+        size_bytes: sizeBytes ?? null,
+        token: hfToken || null,
+        use_env_token: false,
+      }),
     });
     if (res.ok) {
       onNotice(`Download started for ${filename}.`);
@@ -1244,6 +1288,7 @@ function Models({
           )}
           {sortedFiles.map((file) => {
             const key = downloadKey(file.repo, file.filename);
+            const access = accessChecks[key];
             const job = downloadByFile.get(key) ?? pendingDownloads[key];
             const canCancel = !!job && ["queued", "starting", "downloading", "cancelling"].includes(job.status);
             return (
@@ -1258,6 +1303,16 @@ function Models({
                   {isAuxiliaryModelFile(file) && <span>auxiliary file</span>}
                   <span>{file.downloads ?? 0} source downloads</span>
                   <span>{file.likes ?? 0} source likes</span>
+                  {access && (
+                    <span
+                      className={`accessStatus ${access.pending ? "pending" : access.status}`}
+                      role="status"
+                      title={`${file.repo}: ${access.message}`}
+                      aria-label={`${file.repo}: ${access.message}`}
+                    >
+                      {access.pending ? "Checking access..." : anonymousAccessLabels[access.status]}
+                    </span>
+                  )}
                 </div>
                 {job ? (
                   <div className="inlineDownload">
@@ -1270,16 +1325,25 @@ function Models({
                     {job.error && <p>{job.error}</p>}
                   </div>
                 ) : null}
-                <div className="downloadActions">
+                <div className={`downloadActions searchActions${canCancel ? " activeDownloadActions" : ""}`}>
+                  <button
+                    title={`Check anonymous access to ${file.repo}`}
+                    aria-label={`Check anonymous access to ${file.repo}`}
+                    aria-busy={access?.pending ?? false}
+                    className="iconButton accessCheckButton"
+                    disabled={access?.pending}
+                    onClick={() => checkAnonymousAccess(file.repo, file.filename)}
+                  >
+                    {access?.pending ? <LoaderCircle size={17} className="accessSpinner" /> : <Info size={17} />}
+                  </button>
                   {job && canCancel ? (
                     <>
                       <button disabled={job.status === "cancelling"} onClick={() => cancelDownload(job)}>
                         <Square size={15} />
                         {downloadActionLabel(job)}
                       </button>
-                      <button className="dangerAction" onClick={() => discardDownload(job)}>
+                      <button className="dangerAction iconButton" title="Discard download" aria-label="Discard download" onClick={() => discardDownload(job)}>
                         <Trash2 size={15} />
-                        Discard
                       </button>
                     </>
                   ) : (
@@ -1798,7 +1862,7 @@ function SettingsPanel({
     const res = await fetch(`${API_BASE}/runtime/huggingface/auth-check`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: hfToken || null, repo, filename }),
+      body: JSON.stringify({ token: hfToken || null, repo, filename, use_env_token: false }),
     });
     const data = await res.json();
     const message = data.message ?? "No response from auth check.";

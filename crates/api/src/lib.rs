@@ -78,6 +78,7 @@ pub fn router_with_options(
             post(huggingface_auth_check),
         )
         .route("/runtime/huggingface/download", post(huggingface_download))
+        .route("/runtime/huggingface/anonymous-access", post(huggingface_anonymous_access))
         .route("/runtime/downloads", get(downloads))
         .route(
             "/runtime/downloads/clear-history",
@@ -663,6 +664,8 @@ pub struct HuggingFaceDownloadRequest {
     pub model_id: Option<String>,
     pub size_bytes: Option<u64>,
     pub token: Option<String>,
+    #[serde(default = "default_use_env_token")]
+    pub use_env_token: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -670,12 +673,43 @@ pub struct HuggingFaceAuthCheckRequest {
     pub token: Option<String>,
     pub repo: Option<String>,
     pub filename: Option<String>,
+    #[serde(default = "default_use_env_token")]
+    pub use_env_token: bool,
+}
+
+fn default_use_env_token() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct AnonymousAccessRequest {
+    repo: String,
+    filename: String,
+}
+
+async fn huggingface_anonymous_access(Json(body): Json<AnonymousAccessRequest>) -> Json<serde_json::Value> {
+    let response = reqwest::Client::new()
+        .head(huggingface_resolve_url(&body.repo, &body.filename))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+    let (status, message) = match response {
+        Ok(response) => match response.status().as_u16() {
+            200..=299 => ("public", "Anonymous download available."),
+            401 => ("authentication_required", "Authentication required. Sign in to Hugging Face and check repository access."),
+            403 => ("restricted", "Access restricted. Check the repository license and access requirements on Hugging Face."),
+            404 => ("not_found", "File not found or repository is private."),
+            _ => ("unknown", "Could not determine access. Try again later."),
+        },
+        Err(_) => ("unknown", "Access check failed. Check your connection and try again."),
+    };
+    Json(serde_json::json!({ "status": status, "message": message, "repo": body.repo }))
 }
 
 async fn huggingface_auth_check(
     Json(body): Json<HuggingFaceAuthCheckRequest>,
 ) -> impl IntoResponse {
-    let token = normalized_token(body.token).or_else(env_huggingface_token);
+    let token = request_huggingface_token(body.token, body.use_env_token);
     let Some(token) = token else {
         return Json(serde_json::json!({
             "ok": false,
@@ -735,7 +769,7 @@ async fn huggingface_auth_check(
                 "authenticated": true,
                 "repository_access": false,
                 "user": whoami,
-                "message": gated_repo_message(response.status())
+                "message": huggingface_access_message(response.status(), &repo)
             }))
             .into_response(),
             Err(error) => Json(serde_json::json!({
@@ -762,9 +796,10 @@ async fn huggingface_auth_check(
 mod tests {
     use super::{
         HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, apply_huggingface_sizes,
-        calculate_eta_seconds, find_model_by_local_path, is_download_history, is_gguf_header,
-        is_inside_models_root, model_id_from_filename, openai_model_data, range_header,
-        register_model_descriptor, remove_empty_models_subdirectory, unique_model_id,
+        calculate_eta_seconds, find_model_by_local_path, huggingface_access_message,
+        is_download_history, is_gguf_header, is_inside_models_root, model_id_from_filename,
+        openai_model_data, range_header, register_model_descriptor,
+        remove_empty_models_subdirectory, request_huggingface_token, unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use deeplocal_runtime::RuntimeManager;
@@ -1018,6 +1053,44 @@ mod tests {
 
         assert_eq!(result.files[0].size_bytes, Some(100));
     }
+
+    #[test]
+    fn huggingface_access_message_distinguishes_unauthorized() {
+        let message =
+            huggingface_access_message(reqwest::StatusCode::UNAUTHORIZED, "google/gemma-3-1b-it");
+
+        assert!(message.contains("google/gemma-3-1b-it"));
+        assert!(message.contains("valid Hugging Face token"));
+        assert!(!message.contains("hf_"));
+    }
+
+    #[test]
+    fn huggingface_access_message_explains_gated_license() {
+        let message =
+            huggingface_access_message(reqwest::StatusCode::FORBIDDEN, "google/gemma-3-1b-it");
+
+        assert!(message.contains("google/gemma-3-1b-it"));
+        assert!(message.contains("accept its license"));
+        assert!(message.contains("read access"));
+        assert!(!message.contains("hf_"));
+    }
+
+    #[test]
+    fn request_token_can_ignore_environment_fallback() {
+        unsafe {
+            std::env::set_var("HF_TOKEN", "hf_environment_token");
+        }
+
+        assert_eq!(request_huggingface_token(None, false), None);
+        assert_eq!(
+            request_huggingface_token(Some("hf_ui_token".to_string()), false),
+            Some("hf_ui_token".to_string())
+        );
+
+        unsafe {
+            std::env::remove_var("HF_TOKEN");
+        }
+    }
 }
 
 async fn downloads(State(state): State<Arc<ApiState>>) -> Json<Vec<DownloadJob>> {
@@ -1222,7 +1295,7 @@ async fn huggingface_download(
     let safe_repo = body.repo.replace('/', "__");
     let local_dir = models_root().join(safe_repo);
     let local_path = local_dir.join(&body.filename);
-    let token = normalized_token(body.token.clone()).or_else(env_huggingface_token);
+    let token = request_huggingface_token(body.token.clone(), body.use_env_token);
     let now = Utc::now();
     let job = DownloadJob {
         id: job_id.clone(),
@@ -1504,10 +1577,24 @@ fn normalized_token(token: Option<String>) -> Option<String> {
     })
 }
 
-fn gated_repo_message(status: reqwest::StatusCode) -> String {
-    format!(
-        "Hugging Face returned {status}. For official Google Gemma repositories, make sure you are logged in on Hugging Face, accepted the Gemma license for this exact repository, and are using a token with read access to public gated repositories."
-    )
+fn request_huggingface_token(token: Option<String>, use_env_token: bool) -> Option<String> {
+    normalized_token(token).or_else(|| use_env_token.then(env_huggingface_token).flatten())
+}
+
+fn huggingface_access_message(status: reqwest::StatusCode, repo: &str) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return format!(
+            "Hugging Face rejected access to {repo}. Add a valid Hugging Face token with read access and try again."
+        );
+    }
+
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return format!(
+            "Hugging Face blocked access to {repo}. Open the repository on Hugging Face, accept its license or access terms, then retry with a token that has read access."
+        );
+    }
+
+    format!("Hugging Face returned {status} for {repo}. Check repository access and try again.")
 }
 
 fn partial_download_path(local_path: &PathBuf) -> PathBuf {
@@ -1595,7 +1682,10 @@ async fn download_huggingface_file(
     if response.status() == reqwest::StatusCode::UNAUTHORIZED
         || response.status() == reqwest::StatusCode::FORBIDDEN
     {
-        anyhow::bail!("{}", gated_repo_message(response.status()));
+        anyhow::bail!(
+            "{}",
+            huggingface_access_message(response.status(), &body.repo)
+        );
     }
     let resumes_partial =
         resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;

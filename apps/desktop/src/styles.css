@@ -607,6 +607,7 @@ article p {
 }
 
 .searchResults {
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   max-height: 420px;
@@ -614,7 +615,7 @@ article p {
 }
 
 .searchModelCard {
-  grid-template-columns: minmax(280px, 1fr) minmax(280px, 560px) 190px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 190px;
   align-items: start;
 }
 
@@ -625,11 +626,27 @@ article p {
 
 .searchModelCard .inlineDownload {
   grid-column: 1 / -1;
+  grid-row: 2;
 }
 
-.searchModelCard > .downloadActions {
+.searchModelCard > .searchActions {
+  grid-column: 3;
+  grid-row: 1;
+  grid-template-columns: 38px minmax(0, 1fr);
   justify-self: end;
   width: 190px;
+}
+
+.searchModelCard > .activeDownloadActions {
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+}
+
+.searchActions button {
+  height: 38px;
+}
+
+.searchActions svg {
+  flex-shrink: 0;
 }
 
 .downloadActions {
@@ -649,6 +666,22 @@ article p {
   padding: 0 10px;
 }
 
+.downloadActions .iconButton {
+  padding: 0;
+}
+
+.accessSpinner {
+  animation: access-spin 1s linear infinite;
+}
+
+@keyframes access-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accessSpinner { animation: none; }
+}
+
 .modelFileMeta {
   display: flex;
   flex-wrap: wrap;
@@ -663,6 +696,51 @@ article p {
   color: #445057;
   background: #eef2f1;
   font-size: 12px;
+}
+
+.modelFileMeta .accessStatus.public {
+  color: #245f53;
+  background: #e7f5f0;
+}
+
+.modelFileMeta .accessStatus.authentication_required,
+.modelFileMeta .accessStatus.restricted {
+  color: #72591f;
+  background: #f6edcf;
+}
+
+@container (max-width: 800px) {
+  .searchModelCard {
+    grid-template-columns: minmax(0, 1fr) 190px;
+  }
+
+  .searchModelCard > .searchActions {
+    grid-column: 2;
+  }
+
+  .searchModelCard > .modelFileMeta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .searchModelCard .inlineDownload {
+    grid-row: 3;
+  }
+}
+
+@container (max-width: 440px) {
+  .searchModelCard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .searchModelCard > .searchActions {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .searchModelCard .inlineDownload {
+    grid-row: 4;
+  }
 }
 
 .fileList {
@@ -1406,7 +1484,6 @@ label {
   .discoveryToolbar,
   .discoveredRow,
   .fileRow,
-  .searchModelCard,
   .apiEndpoint,
   .loadOptions,
   .modelTools,
