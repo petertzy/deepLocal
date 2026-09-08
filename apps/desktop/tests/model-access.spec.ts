@@ -161,6 +161,113 @@ test("restores the active chat page and unsent chat draft after refresh", async 
   await expect(page.getByRole("checkbox", { name: "Streaming" })).not.toBeChecked();
 });
 
+test("uses in-app dialogs for conversation rename and delete", async ({ page }) => {
+  const nativeDialogs: string[] = [];
+  const conversation = {
+    id: "conversation-fixture",
+    title: "Conversation to edit",
+    model_id: null,
+    messages: [],
+    created_at: "2026-09-08T08:00:00.000Z",
+    updated_at: "2026-09-08T08:00:00.000Z",
+  };
+  let conversations = [conversation];
+  let renamedBody: unknown;
+  let deletedBody: unknown;
+  page.on("dialog", async (dialog) => {
+    nativeDialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+  await page.route("**/runtime/chat/conversations", (route) => route.fulfill({ json: conversations }));
+  await page.route("**/runtime/chat/conversations/rename", (route) => {
+    renamedBody = route.request().postDataJSON();
+    conversations = [{ ...conversation, title: "Renamed conversation" }];
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/runtime/chat/conversations/delete", (route) => {
+    deletedBody = route.request().postDataJSON();
+    conversations = [];
+    return route.fulfill({ json: {} });
+  });
+
+  await navigate(page, "Chat");
+  await expect(page.getByRole("heading", { name: "Conversation to edit", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Rename conversation" }).click();
+  const renameDialog = page.getByRole("dialog", { name: "Rename conversation" });
+  await expect(renameDialog).toBeVisible();
+  await renameDialog.getByLabel("Conversation name").fill("Renamed conversation");
+  await renameDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(renameDialog).toHaveCount(0);
+  expect(renamedBody).toEqual({ id: "conversation-fixture", title: "Renamed conversation" });
+
+  await page.getByRole("button", { name: "Delete conversation" }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete conversation" });
+  await expect(deleteDialog).toContainText('Delete "Renamed conversation"?');
+  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(deleteDialog).toHaveCount(0);
+  expect(deletedBody).toEqual({ id: "conversation-fixture" });
+  expect(nativeDialogs).toEqual([]);
+});
+
+test("uses in-app dialogs for discarding downloads and deleting models", async ({ page }) => {
+  const nativeDialogs: string[] = [];
+  const model = {
+    id: "local-model",
+    name: "local-model",
+    source: "local",
+    format: "gguf",
+    local_path: "/local/models/local-model.gguf",
+    files: [{ filename: "local-model.gguf", path: "/local/models/local-model.gguf", size_bytes: 1024 }],
+  };
+  const job = {
+    id: "download-fixture",
+    repo,
+    filename,
+    status: "error",
+    downloaded_bytes: 1024,
+    total_bytes: 3e9,
+    error: "Network failed.",
+  };
+  let models = [model];
+  let downloads = [job];
+  let discardBody: unknown;
+  let deleteBody: unknown;
+  page.on("dialog", async (dialog) => {
+    nativeDialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+  await page.route("**/runtime/models", (route) => route.fulfill({ json: models }));
+  await page.route("**/runtime/downloads", (route) => route.fulfill({ json: downloads }));
+  await page.route("**/runtime/downloads/discard", (route) => {
+    discardBody = route.request().postDataJSON();
+    downloads = [];
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/runtime/models/delete", (route) => {
+    deleteBody = route.request().postDataJSON();
+    models = [];
+    return route.fulfill({ json: {} });
+  });
+
+  await navigate(page, "Models");
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
+  const discardDialog = page.getByRole("dialog", { name: "Discard download" });
+  await expect(discardDialog).toContainText(`Discard ${filename}?`);
+  await discardDialog.getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(discardDialog).toHaveCount(0);
+  expect(discardBody).toEqual({ job_id: "download-fixture", repo, filename });
+
+  const registeredModel = page.locator(".registeredModelRow").filter({ has: page.getByRole("heading", { name: "local-model", exact: true }) });
+  await registeredModel.getByRole("button", { name: "Delete", exact: true }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete model" });
+  await expect(deleteDialog).toContainText("Delete local-model?");
+  await expect(deleteDialog).toContainText("/local/models/local-model.gguf");
+  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(deleteDialog).toHaveCount(0);
+  expect(deleteBody).toEqual({ model_id: "local-model", delete_file: true });
+  expect(nativeDialogs).toEqual([]);
+});
+
 test("finishes an in-progress check while away, and ignores results for an old token", async ({ page }) => {
   let pendingRoute: Route;
   await page.route(anonymousPath, (route) => { pendingRoute = route; });

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -708,6 +708,10 @@ function Chat({
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState(() => readStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY));
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<ChatConversation | null>(null);
+  const [renamingConversation, setRenamingConversation] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ChatConversation | null>(null);
+  const [deletingConversation, setDeletingConversation] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
@@ -937,40 +941,55 @@ function Chat({
     return conversation;
   }
 
-  async function renameConversation(conversation: ChatConversation) {
-    const title = window.prompt("Rename conversation", conversation.title)?.trim();
+  async function renameConversation(conversation: ChatConversation, nextTitle: string) {
+    const title = nextTitle.trim();
     if (!title) return;
-    const res = await fetch(`${API_BASE}/runtime/chat/conversations/rename`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: conversation.id, title }),
-    });
-    if (!res.ok) {
-      onNotice(await res.text());
-      return;
+    setRenamingConversation(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/chat/conversations/rename`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: conversation.id, title }),
+      });
+      if (!res.ok) {
+        onNotice(await res.text());
+        return;
+      }
+      setConversations((items) => items.map((item) => (item.id === conversation.id ? { ...item, title } : item)));
+      setRenameTarget(null);
+      onNotice("Conversation renamed.");
+    } catch {
+      onNotice("Failed to rename conversation.");
+    } finally {
+      setRenamingConversation(false);
     }
-    setConversations((items) => items.map((item) => (item.id === conversation.id ? { ...item, title } : item)));
-    onNotice("Conversation renamed.");
   }
 
   async function deleteConversation(conversation: ChatConversation) {
-    if (!window.confirm(`Delete "${conversation.title}"?`)) return;
-    const res = await fetch(`${API_BASE}/runtime/chat/conversations/delete`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: conversation.id }),
-    });
-    if (!res.ok) {
-      onNotice(await res.text());
-      return;
+    setDeletingConversation(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/chat/conversations/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: conversation.id }),
+      });
+      if (!res.ok) {
+        onNotice(await res.text());
+        return;
+      }
+      setConversations((items) => items.filter((item) => item.id !== conversation.id));
+      if (conversation.id === activeConversationId) {
+        window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+        setActiveConversationId("");
+      }
+      setDeleteTarget(null);
+      onNotice("Conversation deleted.");
+      refreshConversations();
+    } catch {
+      onNotice("Failed to delete conversation.");
+    } finally {
+      setDeletingConversation(false);
     }
-    setConversations((items) => items.filter((item) => item.id !== conversation.id));
-    if (conversation.id === activeConversationId) {
-      window.localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
-      setActiveConversationId("");
-    }
-    onNotice("Conversation deleted.");
-    refreshConversations();
   }
 
   return (
@@ -1034,10 +1053,10 @@ function Chat({
             </label>
           </div>
           <div className="chatActions">
-            <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && renameConversation(activeConversation)}>
+            <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && setRenameTarget(activeConversation)}>
               <Pencil size={16} />
             </button>
-            <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && deleteConversation(activeConversation)}>
+            <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && setDeleteTarget(activeConversation)}>
               <Trash2 size={16} />
             </button>
           </div>
@@ -1136,6 +1155,29 @@ function Chat({
         </div>
       </div>
       )}
+      {renameTarget && (
+        <TextInputDialog
+          title="Rename conversation"
+          label="Conversation name"
+          initialValue={renameTarget.title}
+          confirmLabel="Save"
+          busy={renamingConversation}
+          onCancel={() => setRenameTarget(null)}
+          onSubmit={(title) => renameConversation(renameTarget, title)}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmationDialog
+          title="Delete conversation"
+          message={`Delete "${deleteTarget.title}"?`}
+          detail="This removes the saved local chat transcript."
+          confirmLabel="Delete"
+          destructive
+          busy={deletingConversation}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => deleteConversation(deleteTarget)}
+        />
+      )}
     </div>
   );
 
@@ -1207,6 +1249,10 @@ function Models({
   const [rescanning, setRescanning] = useState(false);
   const [accessChecks, setAccessChecks] = useState<Record<string, HuggingFaceAccessCheck>>(initialUiState.accessChecks);
   const [searchResultsScrollTop, setSearchResultsScrollTop] = useState(initialUiState.searchResultsScrollTop);
+  const [discardTarget, setDiscardTarget] = useState<DownloadJob | null>(null);
+  const [discardingDownload, setDiscardingDownload] = useState(false);
+  const [deleteModelTarget, setDeleteModelTarget] = useState<{ model: ModelDescriptor; modelPath: string | null } | null>(null);
+  const [deletingModel, setDeletingModel] = useState(false);
   const firstAccessTokenEffect = useRef(true);
   const accessRequests = useRef(new Map<string, AbortController>());
 
@@ -1482,20 +1528,31 @@ function Models({
   }
 
   async function discardDownload(job: DownloadJob) {
-    if (!window.confirm(`Discard download for ${job.filename} and delete its partial file?`)) return;
+    setDiscardingDownload(true);
     const key = downloadKey(job.repo, job.filename);
     setPendingDownloads((current) => {
       const next = { ...current };
       delete next[key];
       return next;
     });
-    const res = await fetch(`${API_BASE}/runtime/downloads/discard`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ job_id: job.id, repo: job.repo, filename: job.filename }),
-    });
-    onNotice(res.ok ? `Discarded download for ${job.filename}.` : await res.text());
-    await onRefresh();
+    try {
+      const res = await fetch(`${API_BASE}/runtime/downloads/discard`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ job_id: job.id, repo: job.repo, filename: job.filename }),
+      });
+      if (res.ok) {
+        setDiscardTarget(null);
+        onNotice(`Discarded download for ${job.filename}.`);
+      } else {
+        onNotice(await res.text());
+      }
+      await onRefresh();
+    } catch {
+      onNotice(`Failed to discard download for ${job.filename}.`);
+    } finally {
+      setDiscardingDownload(false);
+    }
   }
 
   async function clearDownloadHistory() {
@@ -1543,18 +1600,25 @@ function Models({
   }
 
   async function deleteModel(model: ModelDescriptor, modelPath: string | null) {
-    if (!window.confirm(`Delete ${model.name} and remove its local file?\n\n${modelPath ?? "No local path registered"}`)) return;
-    const res = await fetch(`${API_BASE}/runtime/models/delete`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model_id: model.id, delete_file: true }),
-    });
-    if (res.ok) {
-      setDetailsModelId(null);
-      onNotice(`Deleted ${model.name}.`);
-      await onRefresh();
-    } else {
-      onNotice(await res.text());
+    setDeletingModel(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/models/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model_id: model.id, delete_file: true }),
+      });
+      if (res.ok) {
+        setDetailsModelId(null);
+        setDeleteModelTarget(null);
+        onNotice(`Deleted ${model.name}.`);
+        await onRefresh();
+      } else {
+        onNotice(await res.text());
+      }
+    } catch {
+      onNotice(`Failed to delete ${model.name}.`);
+    } finally {
+      setDeletingModel(false);
     }
   }
 
@@ -1746,7 +1810,7 @@ function Models({
                         <Square size={15} />
                         {downloadActionLabel(job)}
                       </button>
-                      <button className="dangerAction iconButton" title="Discard download" aria-label="Discard download" onClick={() => discardDownload(job)}>
+                      <button className="dangerAction iconButton" title="Discard download" aria-label="Discard download" onClick={() => setDiscardTarget(job)}>
                         <Trash2 size={15} />
                       </button>
                     </>
@@ -1789,7 +1853,7 @@ function Models({
                           <Download size={15} />
                           Retry
                         </button>
-                        <button className="dangerAction" onClick={() => discardDownload(job)}>
+                        <button className="dangerAction" onClick={() => setDiscardTarget(job)}>
                           <Trash2 size={15} />
                           Discard
                         </button>
@@ -1875,7 +1939,7 @@ function Models({
                   <Info size={15} />
                   Details
                 </button>
-                <button className="dangerAction" disabled={!!handle} title={handle ? "Unload the model before deleting it" : undefined} onClick={() => deleteModel(model, modelPath)}>
+                <button className="dangerAction" disabled={!!handle} title={handle ? "Unload the model before deleting it" : undefined} onClick={() => setDeleteModelTarget({ model, modelPath })}>
                   <Trash2 size={15} />
                   Delete
                 </button>
@@ -1905,7 +1969,31 @@ function Models({
           onLoad={() => load(detailsModel.id)}
           onUnload={() => unload(detailsModel.id)}
           onReveal={() => revealModel(detailsModel, detailsPath)}
-          onDelete={() => deleteModel(detailsModel, detailsPath)}
+          onDelete={() => setDeleteModelTarget({ model: detailsModel, modelPath: detailsPath })}
+        />
+      )}
+      {discardTarget && (
+        <ConfirmationDialog
+          title="Discard download"
+          message={`Discard ${discardTarget.filename}?`}
+          detail="This stops tracking the job and deletes the partial file."
+          confirmLabel="Discard"
+          destructive
+          busy={discardingDownload}
+          onCancel={() => setDiscardTarget(null)}
+          onConfirm={() => discardDownload(discardTarget)}
+        />
+      )}
+      {deleteModelTarget && (
+        <ConfirmationDialog
+          title="Delete model"
+          message={`Delete ${deleteModelTarget.model.name}?`}
+          detail={deleteModelTarget.modelPath ?? "No local path registered"}
+          confirmLabel="Delete"
+          destructive
+          busy={deletingModel}
+          onCancel={() => setDeleteModelTarget(null)}
+          onConfirm={() => deleteModel(deleteModelTarget.model, deleteModelTarget.modelPath)}
         />
       )}
     </div>
@@ -2070,6 +2158,149 @@ function EmptyState({
   );
 }
 
+function ConfirmationDialog({
+  title,
+  message,
+  detail,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  destructive,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  detail?: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = useId();
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) onCancel();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onCancel]);
+
+  return (
+    <div className="modalLayer" role="presentation" onMouseDown={() => !busy && onCancel()}>
+      <section
+        className="appDialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialogHeader">
+          <div className={destructive ? "dialogIcon danger" : "dialogIcon"}>
+            {destructive ? <Trash2 size={18} /> : <Info size={18} />}
+          </div>
+          <div>
+            <h2 id={titleId}>{title}</h2>
+            <p>{message}</p>
+          </div>
+        </div>
+        {detail && <p className="dialogDetail">{detail}</p>}
+        <div className="dialogActions">
+          <button className="secondaryAction" autoFocus disabled={busy} onClick={onCancel}>
+            {cancelLabel}
+          </button>
+          <button className={destructive ? "dangerAction" : "primary"} disabled={busy} onClick={onConfirm}>
+            {busy && <LoaderCircle size={16} className="accessSpinner" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function TextInputDialog({
+  title,
+  label,
+  initialValue,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  title: string;
+  label: string;
+  initialValue: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  busy?: boolean;
+  onCancel: () => void;
+  onSubmit: (value: string) => void;
+}) {
+  const titleId = useId();
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const canSubmit = !!value.trim() && value.trim() !== initialValue.trim();
+
+  useEffect(() => {
+    setValue(initialValue);
+    window.setTimeout(() => inputRef.current?.select(), 0);
+  }, [initialValue]);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) onCancel();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onCancel]);
+
+  return (
+    <div className="modalLayer" role="presentation" onMouseDown={() => !busy && onCancel()}>
+      <section
+        className="appDialog inputDialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialogHeader">
+          <div className="dialogIcon">
+            <Pencil size={18} />
+          </div>
+          <div>
+            <h2 id={titleId}>{title}</h2>
+          </div>
+        </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (canSubmit && !busy) onSubmit(value);
+          }}
+        >
+          <label className="dialogField">
+            <span>{label}</span>
+            <input ref={inputRef} value={value} disabled={busy} onChange={(event) => setValue(event.target.value)} />
+          </label>
+          <div className="dialogActions">
+            <button type="button" className="secondaryAction" disabled={busy} onClick={onCancel}>
+              {cancelLabel}
+            </button>
+            <button type="submit" className="primary" disabled={!canSubmit || busy}>
+              {busy && <LoaderCircle size={16} className="accessSpinner" />}
+              {confirmLabel}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function ModelDetailsDrawer({
   model,
   modelPath,
@@ -2093,7 +2324,7 @@ function ModelDetailsDrawer({
   onLoad: () => Promise<void>;
   onUnload: () => Promise<void>;
   onReveal: () => Promise<void>;
-  onDelete: () => Promise<void>;
+  onDelete: () => void;
 }) {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
