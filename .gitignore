@@ -2,6 +2,8 @@
 /.tools/
 /apps/desktop/node_modules/
 /apps/desktop/dist/
+/apps/desktop/test-results/
+/apps/desktop/playwright-report/
 /apps/desktop/src-tauri/gen/
 /apps/desktop/src-tauri/icons/icon.iconset/
 /apps/desktop/src-tauri/icons/ios/

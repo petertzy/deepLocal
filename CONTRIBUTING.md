@@ -58,6 +58,21 @@ cargo test
 
 If a check fails for an environment reason, mention that in the pull request.
 
+Frontend interaction tests run with mocked API responses, without downloading
+models or using real tokens:
+
+```bash
+cd apps/desktop
+npm ci
+npm run test:e2e
+```
+
+On macOS, the tests use an existing Google Chrome installation. Otherwise,
+install a test browser with `npx playwright install chromium`, or select an
+installed browser with `PLAYWRIGHT_CHANNEL=chrome npm run test:e2e`. The test
+server uses port 5174. Screenshots are written to the ignored `test-results/`
+directory.
+
 ## Code Style
 
 - Follow the existing Rust and React patterns.
@@ -98,7 +113,7 @@ Before submitting secret-related changes, it is reasonable to run:
 rg "hf_" .
 ```
 
-The expected safe match today is the token placeholder text in the Settings UI.
+Expected matches include token placeholders and explicitly fake test fixtures.
 
 ## Reporting Bugs
 

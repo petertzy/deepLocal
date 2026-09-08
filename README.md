@@ -266,6 +266,25 @@ You can paste the token in the Settings page or set `HF_TOKEN` /
 `HUGGINGFACE_TOKEN` before starting the backend. Tokens are not stored in this
 repository.
 
+Use **Settings > Check Token** to validate a token and view its account. In
+**Models** search results, click **Check access** next to a model to check that
+exact repository and file. It uses your configured token, or checks anonymous
+access when no token is set. Each search row also links directly to its
+Hugging Face repository for reviewing files, licenses, or requesting access. No
+repository name or filename needs to be entered manually.
+
+The desktop UI remembers the last open page, search results, sorting, form
+drafts, diagnostics, chat drafts, and scroll positions across navigation,
+refreshes, and app restarts. Changing the token clears previous access results
+so they can be checked again with the new credentials.
+
+Recommended token setup:
+
+- Use a fine-grained Hugging Face access token.
+- Grant read access only.
+- Add access to the exact gated repositories you want to download.
+- Do not grant write access for deepLocal downloads.
+
 ## Search Filters
 
 Hugging Face GGUF search uses a safe default blocked-keyword policy to hide

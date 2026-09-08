@@ -119,6 +119,7 @@ nav button:hover {
 }
 
 .workspace {
+  min-width: 0;
   padding: 24px;
 }
 
@@ -488,6 +489,11 @@ article p {
   border-bottom: 1px solid #dde2e4;
 }
 
+.discoverPanel {
+  container-type: inline-size;
+  min-width: 0;
+}
+
 .sectionTitle,
 .discoveryToolbar,
 .searchRow,
@@ -570,7 +576,8 @@ article p {
 }
 
 .sortControl {
-  grid-template-columns: auto 210px;
+  grid-template-columns: auto minmax(0, 210px);
+  min-width: 0;
 }
 
 .auxiliaryToggle {
@@ -615,7 +622,7 @@ article p {
 }
 
 .searchModelCard {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 190px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 290px;
   align-items: start;
 }
 
@@ -624,25 +631,47 @@ article p {
   overflow-wrap: anywhere;
 }
 
+.repoLinkLine a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #53636c;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+
+.repoLinkLine a:hover,
+.repoLinkLine a:focus-visible {
+  color: #245f53;
+  text-decoration-color: currentColor;
+}
+
+.repoLinkLine svg {
+  flex-shrink: 0;
+}
+
 .searchModelCard .inlineDownload {
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 3;
 }
 
 .searchModelCard > .searchActions {
   grid-column: 3;
   grid-row: 1;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 136px minmax(0, 1fr);
   justify-self: end;
-  width: 190px;
+  width: 290px;
+  max-width: 100%;
 }
 
 .searchModelCard > .activeDownloadActions {
-  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  grid-template-columns: 136px minmax(0, 1fr) 38px;
 }
 
 .searchActions button {
   height: 38px;
+  font-size: 13px;
 }
 
 .searchActions svg {
@@ -690,7 +719,8 @@ article p {
   min-width: 0;
 }
 
-.modelFileMeta span {
+.modelFileMeta span,
+.accessStatus {
   border-radius: 999px;
   padding: 4px 8px;
   color: #445057;
@@ -698,20 +728,83 @@ article p {
   font-size: 12px;
 }
 
-.modelFileMeta .accessStatus.public {
+.accessStatus.public,
+.accessStatus.token_access {
   color: #245f53;
   background: #e7f5f0;
 }
 
-.modelFileMeta .accessStatus.authentication_required,
-.modelFileMeta .accessStatus.restricted {
+.accessStatus.authentication_required,
+.accessStatus.restricted,
+.accessStatus.token_no_access,
+.accessStatus.token_invalid {
   color: #72591f;
   background: #f6edcf;
 }
 
-@container (max-width: 800px) {
+.accessFeedback {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid #edf0f1;
+  padding-top: 10px;
+  font-size: 13px;
+}
+
+.accessFeedback > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.accessFeedback p {
+  flex: 1 1 240px;
+  margin: 0;
+}
+
+.accessLinks a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #245f53;
+  overflow-wrap: anywhere;
+}
+
+.accessLinks svg {
+  flex-shrink: 0;
+}
+
+.accessLinks button {
+  min-height: 30px;
+  font-size: 13px;
+}
+
+@container (max-width: 1000px) {
+  .searchRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .searchRow > input,
+  .searchRow .sortControl {
+    grid-column: 1 / -1;
+  }
+
+  .searchRow .sortControl {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .searchRow .auxiliaryToggle {
+    grid-template-columns: auto auto;
+    justify-self: start;
+  }
+
   .searchModelCard {
-    grid-template-columns: minmax(0, 1fr) 190px;
+    grid-template-columns: minmax(0, 1fr) 290px;
   }
 
   .searchModelCard > .searchActions {
@@ -723,12 +816,16 @@ article p {
     grid-row: 2;
   }
 
-  .searchModelCard .inlineDownload {
+  .accessFeedback {
     grid-row: 3;
+  }
+
+  .searchModelCard .inlineDownload {
+    grid-row: 4;
   }
 }
 
-@container (max-width: 440px) {
+@container (max-width: 600px) {
   .searchModelCard {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -738,8 +835,22 @@ article p {
     grid-row: 3;
   }
 
-  .searchModelCard .inlineDownload {
+  .searchModelCard > .activeDownloadActions {
+    grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .activeDownloadActions .accessCheckButton {
+    grid-column: 1 / -1;
+    justify-self: end;
+    width: 136px;
+  }
+
+  .accessFeedback {
     grid-row: 4;
+  }
+
+  .searchModelCard .inlineDownload {
+    grid-row: 5;
   }
 }
 
@@ -1356,24 +1467,51 @@ label {
 
 .settingsGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   align-content: start;
+}
+
+.settingsGrid > label {
+  min-width: 0;
+}
+
+.settingsPanels {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 10px;
+  padding-top: 20px;
+  border-top: 1px solid #dde2e4;
 }
 
 .authPanel,
 .filterPanel {
   display: grid;
+  align-content: start;
   gap: 10px;
   min-width: 0;
-  border: 1px solid #dde2e4;
-  border-radius: 8px;
-  padding: 14px;
 }
 
 .authPanel p,
 .filterPanel p {
   color: #66727a;
+  overflow-wrap: anywhere;
+}
+
+.diagnosticGrid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+}
+
+.diagnosticGrid span {
+  color: #66727a;
+}
+
+.diagnosticGrid strong {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -1406,7 +1544,8 @@ label {
 }
 
 @media (max-width: 960px) {
-  .dashboard {
+  .dashboard,
+  .settingsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1459,6 +1598,11 @@ label {
 
   .headerActions {
     display: grid;
+  }
+
+  .settingsGrid,
+  .settingsPanels {
+    grid-template-columns: 1fr;
   }
 
   .drawerLayer {

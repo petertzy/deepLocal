@@ -78,7 +78,10 @@ pub fn router_with_options(
             post(huggingface_auth_check),
         )
         .route("/runtime/huggingface/download", post(huggingface_download))
-        .route("/runtime/huggingface/anonymous-access", post(huggingface_anonymous_access))
+        .route(
+            "/runtime/huggingface/anonymous-access",
+            post(huggingface_anonymous_access),
+        )
         .route("/runtime/downloads", get(downloads))
         .route(
             "/runtime/downloads/clear-history",
@@ -687,7 +690,9 @@ struct AnonymousAccessRequest {
     filename: String,
 }
 
-async fn huggingface_anonymous_access(Json(body): Json<AnonymousAccessRequest>) -> Json<serde_json::Value> {
+async fn huggingface_anonymous_access(
+    Json(body): Json<AnonymousAccessRequest>,
+) -> Json<serde_json::Value> {
     let response = reqwest::Client::new()
         .head(huggingface_resolve_url(&body.repo, &body.filename))
         .timeout(std::time::Duration::from_secs(15))
@@ -696,12 +701,21 @@ async fn huggingface_anonymous_access(Json(body): Json<AnonymousAccessRequest>) 
     let (status, message) = match response {
         Ok(response) => match response.status().as_u16() {
             200..=299 => ("public", "Anonymous download available."),
-            401 => ("authentication_required", "Authentication required. Sign in to Hugging Face and check repository access."),
-            403 => ("restricted", "Access restricted. Check the repository license and access requirements on Hugging Face."),
+            401 => (
+                "authentication_required",
+                "Authentication required. Sign in to Hugging Face and check repository access.",
+            ),
+            403 => (
+                "restricted",
+                "Access restricted. Check the repository license and access requirements on Hugging Face.",
+            ),
             404 => ("not_found", "File not found or repository is private."),
             _ => ("unknown", "Could not determine access. Try again later."),
         },
-        Err(_) => ("unknown", "Access check failed. Check your connection and try again."),
+        Err(_) => (
+            "unknown",
+            "Access check failed. Check your connection and try again.",
+        ),
     };
     Json(serde_json::json!({ "status": status, "message": message, "repo": body.repo }))
 }
@@ -714,6 +728,10 @@ async fn huggingface_auth_check(
         return Json(serde_json::json!({
             "ok": false,
             "authenticated": false,
+            "token_valid": false,
+            "repository_checked": false,
+            "repository_access": null,
+            "user": null,
             "message": "No Hugging Face token was provided."
         }))
         .into_response();
@@ -734,6 +752,10 @@ async fn huggingface_auth_check(
             return Json(serde_json::json!({
                 "ok": false,
                 "authenticated": false,
+                "token_valid": false,
+                "repository_checked": false,
+                "repository_access": null,
+                "user": null,
                 "message": format!("Token rejected by Hugging Face: {}", response.status())
             }))
             .into_response();
@@ -742,15 +764,20 @@ async fn huggingface_auth_check(
             return Json(serde_json::json!({
                 "ok": false,
                 "authenticated": false,
+                "token_valid": false,
+                "repository_checked": false,
+                "repository_access": null,
+                "user": null,
                 "message": error.to_string()
             }))
             .into_response();
         }
     };
+    let whoami = sanitize_huggingface_whoami(whoami);
 
     if let (Some(repo), Some(filename)) = (body.repo, body.filename) {
         let response = apply_huggingface_auth(
-            client.get(huggingface_resolve_url(&repo, &filename)),
+            client.head(huggingface_resolve_url(&repo, &filename)),
             Some(&token),
         )
         .send()
@@ -759,7 +786,11 @@ async fn huggingface_auth_check(
             Ok(response) if response.status().is_success() => Json(serde_json::json!({
                 "ok": true,
                 "authenticated": true,
+                "token_valid": true,
+                "repository_checked": true,
                 "repository_access": true,
+                "repo": repo,
+                "filename": filename,
                 "user": whoami,
                 "message": "Token can access this file."
             }))
@@ -767,7 +798,11 @@ async fn huggingface_auth_check(
             Ok(response) => Json(serde_json::json!({
                 "ok": false,
                 "authenticated": true,
+                "token_valid": true,
+                "repository_checked": true,
                 "repository_access": false,
+                "repo": repo,
+                "filename": filename,
                 "user": whoami,
                 "message": huggingface_access_message(response.status(), &repo)
             }))
@@ -775,7 +810,11 @@ async fn huggingface_auth_check(
             Err(error) => Json(serde_json::json!({
                 "ok": false,
                 "authenticated": true,
+                "token_valid": true,
+                "repository_checked": true,
                 "repository_access": false,
+                "repo": repo,
+                "filename": filename,
                 "user": whoami,
                 "message": error.to_string()
             }))
@@ -786,6 +825,9 @@ async fn huggingface_auth_check(
     Json(serde_json::json!({
         "ok": true,
         "authenticated": true,
+        "token_valid": true,
+        "repository_checked": false,
+        "repository_access": null,
         "user": whoami,
         "message": "Token is valid."
     }))
@@ -799,7 +841,8 @@ mod tests {
         calculate_eta_seconds, find_model_by_local_path, huggingface_access_message,
         is_download_history, is_gguf_header, is_inside_models_root, model_id_from_filename,
         openai_model_data, range_header, register_model_descriptor,
-        remove_empty_models_subdirectory, request_huggingface_token, unique_model_id,
+        remove_empty_models_subdirectory, request_huggingface_token, sanitize_huggingface_whoami,
+        unique_model_id,
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use deeplocal_runtime::RuntimeManager;
@@ -1090,6 +1133,24 @@ mod tests {
         unsafe {
             std::env::remove_var("HF_TOKEN");
         }
+    }
+
+    #[test]
+    fn huggingface_whoami_is_sanitized() {
+        let sanitized = sanitize_huggingface_whoami(Some(serde_json::json!({
+            "name": "local-user",
+            "fullname": "Local User",
+            "type": "user",
+            "email": "local@example.com",
+            "auth": { "accessToken": "hf_secret" }
+        })))
+        .expect("whoami should be present");
+
+        assert_eq!(sanitized["name"], "local-user");
+        assert_eq!(sanitized["display_name"], "Local User");
+        assert_eq!(sanitized["type"], "user");
+        assert!(sanitized.get("email").is_none());
+        assert!(sanitized.get("auth").is_none());
     }
 }
 
@@ -1579,6 +1640,29 @@ fn normalized_token(token: Option<String>) -> Option<String> {
 
 fn request_huggingface_token(token: Option<String>, use_env_token: bool) -> Option<String> {
     normalized_token(token).or_else(|| use_env_token.then(env_huggingface_token).flatten())
+}
+
+fn sanitize_huggingface_whoami(whoami: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let whoami = whoami?;
+    let name = whoami
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let display_name = whoami
+        .get("fullname")
+        .or_else(|| whoami.get("fullName"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let account_type = whoami
+        .get("type")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+
+    Some(serde_json::json!({
+        "name": name,
+        "display_name": display_name,
+        "type": account_type
+    }))
 }
 
 fn huggingface_access_message(status: reqwest::StatusCode, repo: &str) -> String {

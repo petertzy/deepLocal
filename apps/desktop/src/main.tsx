@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -13,6 +13,7 @@ import {
   Copy,
   Cpu,
   Download,
+  ExternalLink,
   FolderOpen,
   Info,
   LoaderCircle,
@@ -24,6 +25,7 @@ import {
   Search,
   Server,
   Settings,
+  ShieldCheck,
   Square,
   Trash2,
   X,
@@ -92,17 +94,22 @@ type HuggingFaceModelFile = {
   likes?: number | null;
 };
 
-const anonymousAccessLabels = {
-  public: "Anonymous download",
+const accessCheckLabels = {
+  public: "Public",
+  token_access: "Token access",
+  token_no_access: "Token valid, no access",
+  token_invalid: "Token invalid",
   authentication_required: "Sign-in required",
   restricted: "Access restricted",
   not_found: "Not found / private",
   unknown: "Check failed",
 };
 
-type AnonymousAccessCheck = {
+type AccessCheckStatus = keyof typeof accessCheckLabels;
+
+type HuggingFaceAccessCheck = {
   pending: boolean;
-  status: keyof typeof anonymousAccessLabels;
+  status: AccessCheckStatus;
   message: string;
 };
 
@@ -131,6 +138,21 @@ type SearchFiltersConfig = {
   blocked_keywords: string[];
 };
 
+type HuggingFaceAuthDiagnostic = {
+  ok?: boolean;
+  token_valid?: boolean;
+  repository_checked?: boolean;
+  repository_access?: boolean | null;
+  repo?: string;
+  filename?: string;
+  user?: {
+    name?: string | null;
+    display_name?: string | null;
+    type?: string | null;
+  } | null;
+  message?: string;
+};
+
 type ModelLoadOptions = {
   context_length: number;
   gpu_layers: number;
@@ -139,8 +161,224 @@ type ModelLoadOptions = {
 type StoredModelLoadOptions = Record<string, ModelLoadOptions>;
 
 const API_BASE = "http://127.0.0.1:14567";
+const ACTIVE_TAB_STORAGE_KEY = "deeplocal:active-tab";
 const ACTIVE_CHAT_STORAGE_KEY = "deeplocal:active-chat-conversation";
+const APP_SCROLL_STORAGE_KEY = "deeplocal:app-scroll-positions";
+const CHAT_INPUT_STORAGE_KEY = "deeplocal:chat-input";
+const CHAT_SHOW_CONVERSATIONS_STORAGE_KEY = "deeplocal:chat-show-conversations";
+const CHAT_STREAMING_STORAGE_KEY = "deeplocal:chat-streaming";
+const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
+const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
+const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
+
+function readJsonStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonStorage(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Browsers can reject storage writes in private or quota-limited sessions.
+  }
+}
+
+function readStringStorage(key: string, fallback = "") {
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStringStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage failures; runtime data remains usable for this session.
+  }
+}
+
+function isTab(value: unknown): value is Tab {
+  return value === "dashboard" || value === "chat" || value === "models" || value === "server" || value === "settings";
+}
+
+function readStoredTab(): Tab {
+  const value = readStringStorage(ACTIVE_TAB_STORAGE_KEY, "dashboard");
+  return isTab(value) ? value : "dashboard";
+}
+
+function readStoredScrollPositions(): Partial<Record<Tab, number>> {
+  const raw = readJsonStorage<Record<string, unknown>>(APP_SCROLL_STORAGE_KEY, {});
+  const positions: Partial<Record<Tab, number>> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (isTab(key) && typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      positions[key] = value;
+    }
+  }
+  return positions;
+}
+
+function isSearchSort(value: unknown): value is SearchSort {
+  return value === "downloads" || value === "likes" || value === "smallest-file" || value === "largest-file" || value === "name";
+}
+
+type ModelsUiState = {
+  id: string;
+  path: string;
+  query: string;
+  results: HuggingFaceResult[];
+  sortBy: SearchSort;
+  showAuxiliaryFiles: boolean;
+  discoveredFiles: DiscoveredModelFile[];
+  accessChecks: Record<string, HuggingFaceAccessCheck>;
+  detailsModelId: string | null;
+  searchResultsScrollTop: number;
+};
+
+type SettingsUiState = {
+  authMessage: string;
+  authDiagnostic: HuggingFaceAuthDiagnostic | null;
+  blockedKeyword: string;
+};
+
+function asStoredString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asStoredNumber(value: unknown, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function asStoredBoolean(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function sanitizeSearchResults(value: unknown): HuggingFaceResult[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as Record<string, unknown>;
+    const repo = asStoredString(candidate.repo);
+    const files = Array.isArray(candidate.files)
+      ? candidate.files.flatMap((file) => {
+          if (!file || typeof file !== "object") return [];
+          const fileCandidate = file as Record<string, unknown>;
+          const filename = asStoredString(fileCandidate.filename);
+          if (!filename) return [];
+          return [{
+            filename,
+            size_bytes: typeof fileCandidate.size_bytes === "number" ? fileCandidate.size_bytes : null,
+          }];
+        })
+      : [];
+    if (!repo || !files.length) return [];
+    return [{
+      repo,
+      downloads: typeof candidate.downloads === "number" ? candidate.downloads : null,
+      likes: typeof candidate.likes === "number" ? candidate.likes : null,
+      files,
+    }];
+  });
+}
+
+function sanitizeDiscoveredFiles(value: unknown): DiscoveredModelFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as Record<string, unknown>;
+    const filename = asStoredString(candidate.filename);
+    const path = asStoredString(candidate.path);
+    const suggestedModelId = asStoredString(candidate.suggested_model_id);
+    if (!filename || !path || !suggestedModelId) return [];
+    return [{
+      filename,
+      path,
+      suggested_model_id: suggestedModelId,
+      size_bytes: asStoredNumber(candidate.size_bytes, 0),
+    }];
+  });
+}
+
+function sanitizeAccessChecks(value: unknown): Record<string, HuggingFaceAccessCheck> {
+  if (!value || typeof value !== "object") return {};
+  const checks: Record<string, HuggingFaceAccessCheck> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!item || typeof item !== "object") continue;
+    const candidate = item as Record<string, unknown>;
+    const rawStatus = candidate.status;
+    const status: AccessCheckStatus = typeof rawStatus === "string" && Object.hasOwn(accessCheckLabels, rawStatus)
+      ? (rawStatus as AccessCheckStatus)
+      : "unknown";
+    const wasPending = candidate.pending === true;
+    checks[key] = {
+      pending: false,
+      status: wasPending ? "unknown" : status,
+      message: wasPending ? "Access check was interrupted. Check again." : asStoredString(candidate.message, "Check this repository before downloading."),
+    };
+  }
+  return checks;
+}
+
+function readStoredModelsUiState(): ModelsUiState {
+  const stored = readJsonStorage<Record<string, unknown>>(MODELS_UI_STORAGE_KEY, {});
+  return {
+    id: asStoredString(stored.id),
+    path: asStoredString(stored.path),
+    query: asStoredString(stored.query, "Gemma 3 1b"),
+    results: sanitizeSearchResults(stored.results),
+    sortBy: isSearchSort(stored.sortBy) ? stored.sortBy : "downloads",
+    showAuxiliaryFiles: asStoredBoolean(stored.showAuxiliaryFiles),
+    discoveredFiles: sanitizeDiscoveredFiles(stored.discoveredFiles),
+    accessChecks: sanitizeAccessChecks(stored.accessChecks),
+    detailsModelId: typeof stored.detailsModelId === "string" ? stored.detailsModelId : null,
+    searchResultsScrollTop: asStoredNumber(stored.searchResultsScrollTop, 0),
+  };
+}
+
+function writeStoredModelsUiState(state: ModelsUiState) {
+  writeJsonStorage(MODELS_UI_STORAGE_KEY, {
+    ...state,
+    accessChecks: sanitizeAccessChecks(state.accessChecks),
+  });
+}
+
+function sanitizeAuthDiagnostic(value: unknown): HuggingFaceAuthDiagnostic | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const user = candidate.user && typeof candidate.user === "object" ? (candidate.user as Record<string, unknown>) : null;
+  return {
+    ok: typeof candidate.ok === "boolean" ? candidate.ok : undefined,
+    token_valid: typeof candidate.token_valid === "boolean" ? candidate.token_valid : undefined,
+    repository_checked: typeof candidate.repository_checked === "boolean" ? candidate.repository_checked : undefined,
+    repository_access: typeof candidate.repository_access === "boolean" || candidate.repository_access === null ? candidate.repository_access : undefined,
+    repo: asStoredString(candidate.repo) || undefined,
+    filename: asStoredString(candidate.filename) || undefined,
+    message: asStoredString(candidate.message) || undefined,
+    user: user
+      ? {
+          name: asStoredString(user.name) || null,
+          display_name: asStoredString(user.display_name) || null,
+          type: asStoredString(user.type) || null,
+        }
+      : null,
+  };
+}
+
+function readStoredSettingsUiState(): SettingsUiState {
+  const stored = readJsonStorage<Record<string, unknown>>(SETTINGS_UI_STORAGE_KEY, {});
+  return {
+    authMessage: asStoredString(stored.authMessage, "Token not checked."),
+    authDiagnostic: sanitizeAuthDiagnostic(stored.authDiagnostic),
+    blockedKeyword: asStoredString(stored.blockedKeyword),
+  };
+}
 
 function defaultLoadOptions(hardware: HardwareProfile | null): ModelLoadOptions {
   const isAppleSilicon =
@@ -181,7 +419,9 @@ function writeStoredModelLoadOptions(options: StoredModelLoadOptions) {
 }
 
 function App() {
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useState<Tab>(() => readStoredTab());
+  const tabRef = useRef(tab);
+  const pageScrollPositions = useRef<Partial<Record<Tab, number>>>(readStoredScrollPositions());
   const [health, setHealth] = useState<Health>("offline");
   const [hardware, setHardware] = useState<HardwareProfile | null>(null);
   const [models, setModels] = useState<ModelDescriptor[]>([]);
@@ -189,9 +429,53 @@ function App() {
   const [downloads, setDownloads] = useState<DownloadJob[]>([]);
   const [modelsDirectory, setModelsDirectory] = useState("./models");
   const [hfToken, setHfToken] = useState(() => window.localStorage.getItem("deeplocal:hf-token") ?? "");
-  const [notice, setNotice] = useState("Start the API with `cargo run -p deeplocal -- serve`.");
+  const [notices, setNotices] = useState<Partial<Record<Tab, string>>>({});
   const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
   const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
+  const notice = notices[tab];
+
+  function updateNotice(page: Tab, message: string) {
+    setNotices((current) => ({ ...current, [page]: message }));
+  }
+
+  function saveCurrentScrollPosition() {
+    pageScrollPositions.current[tabRef.current] = window.scrollY;
+    writeJsonStorage(APP_SCROLL_STORAGE_KEY, pageScrollPositions.current);
+  }
+
+  function selectTab(next: Tab) {
+    if (next === tab) return;
+    saveCurrentScrollPosition();
+    setTab(next);
+  }
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: pageScrollPositions.current[tab] ?? 0, behavior: "instant" });
+  }, [tab]);
+
+  useEffect(() => {
+    tabRef.current = tab;
+    writeStringStorage(ACTIVE_TAB_STORAGE_KEY, tab);
+  }, [tab]);
+
+  useEffect(() => {
+    let frame = 0;
+    function saveSoon() {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        saveCurrentScrollPosition();
+      });
+    }
+    window.addEventListener("scroll", saveSoon, { passive: true });
+    window.addEventListener("beforeunload", saveCurrentScrollPosition);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      saveCurrentScrollPosition();
+      window.removeEventListener("scroll", saveSoon);
+      window.removeEventListener("beforeunload", saveCurrentScrollPosition);
+    };
+  }, []);
 
   function loadOptionsForModel(modelId: string) {
     return sanitizeLoadOptions(loadOptionsByModel[modelId] ?? fallbackLoadOptions, fallbackLoadOptions);
@@ -268,7 +552,7 @@ function App() {
           {tabs.map((item) => {
             const Icon = item.icon;
             return (
-              <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}>
+              <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => selectTab(item.id)} title={item.label} aria-label={item.label}>
                 <Icon size={18} />
                 <span>{item.label}</span>
               </button>
@@ -285,7 +569,7 @@ function App() {
         <header>
           <div>
             <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-            <p>{notice}</p>
+            {notice && <p>{notice}</p>}
           </div>
           <div className="headerControls">
             <div className={`healthBadge ${health}`}>
@@ -299,18 +583,18 @@ function App() {
           </div>
         </header>
 
-        {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => setTab("models")} />}
+        {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => selectTab("models")} />}
         {tab === "chat" && (
           <Chat
             models={models}
             loaded={loaded}
             loadOptionsForModel={loadOptionsForModel}
-            onOpenModels={() => setTab("models")}
-            onNotice={setNotice}
+            onOpenModels={() => selectTab("models")}
+            onNotice={(message) => updateNotice("chat", message)}
             onRefresh={refresh}
           />
         )}
-        {tab === "models" && (
+        <RetainedPage active={tab === "models"}>
           <Models
             models={models}
             loaded={loaded}
@@ -319,17 +603,29 @@ function App() {
             hfToken={hfToken}
             loadOptionsForModel={loadOptionsForModel}
             updateLoadOption={updateLoadOption}
-            onNotice={setNotice}
+            onNotice={(message) => updateNotice("models", message)}
             onRefresh={refresh}
+            onOpenSettings={() => selectTab("settings")}
           />
-        )}
-        {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onOpenModels={() => setTab("models")} onNotice={setNotice} />}
-        {tab === "settings" && (
-          <SettingsPanel modelsDirectory={modelsDirectory} hfToken={hfToken} onTokenChange={setHfToken} onNotice={setNotice} />
-        )}
+        </RetainedPage>
+        {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onOpenModels={() => selectTab("models")} onNotice={(message) => updateNotice("server", message)} />}
+        <RetainedPage active={tab === "settings"}>
+          <SettingsPanel modelsDirectory={modelsDirectory} hfToken={hfToken} onTokenChange={setHfToken} onNotice={(message) => updateNotice("settings", message)} />
+        </RetainedPage>
       </section>
     </main>
   );
+}
+
+function RetainedPage({ active, children }: { active: boolean; children: React.ReactNode }) {
+  const [visited, setVisited] = useState(active);
+
+  useEffect(() => {
+    if (active) setVisited(true);
+  }, [active]);
+
+  // Keep drafts, results, pending requests, and inner scroll positions between visits.
+  return <div hidden={!active}>{active || visited ? children : null}</div>;
 }
 
 function Dashboard({
@@ -404,13 +700,13 @@ function Chat({
   onNotice: (message: string) => void;
   onRefresh: () => Promise<void>;
 }) {
-  const [input, setInput] = useState("Could you please introduce yourself in detail? Thank you.");
+  const [input, setInput] = useState(() => readStringStorage(CHAT_INPUT_STORAGE_KEY, "Could you please introduce yourself in detail? Thank you."));
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState(() => window.localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY) ?? "");
-  const [showConversationList, setShowConversationList] = useState(false);
-  const [streaming, setStreaming] = useState(true);
+  const [activeConversationId, setActiveConversationId] = useState(() => readStringStorage(ACTIVE_CHAT_STORAGE_KEY));
+  const [showConversationList, setShowConversationList] = useState(() => readJsonStorage(CHAT_SHOW_CONVERSATIONS_STORAGE_KEY, false));
+  const [streaming, setStreaming] = useState(() => readJsonStorage(CHAT_STREAMING_STORAGE_KEY, true));
   const [isGenerating, setIsGenerating] = useState(false);
-  const [selectedModelId, setSelectedModelId] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState(() => readStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY));
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
@@ -452,6 +748,22 @@ function Chat({
   useEffect(() => {
     refreshConversations();
   }, [refreshConversations]);
+
+  useEffect(() => {
+    writeStringStorage(CHAT_INPUT_STORAGE_KEY, input);
+  }, [input]);
+
+  useEffect(() => {
+    writeJsonStorage(CHAT_SHOW_CONVERSATIONS_STORAGE_KEY, showConversationList);
+  }, [showConversationList]);
+
+  useEffect(() => {
+    writeJsonStorage(CHAT_STREAMING_STORAGE_KEY, streaming);
+  }, [streaming]);
+
+  useEffect(() => {
+    writeStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY, selectedModelId);
+  }, [selectedModelId]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -810,7 +1122,7 @@ function Chat({
             <input type="checkbox" checked={streaming} disabled={isGenerating} onChange={(event) => setStreaming(event.target.checked)} />
             <span>Streaming</span>
           </label>
-          <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
+          <input aria-label="Chat prompt" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
           {isGenerating ? (
             <button onClick={stopGeneration}>
               <Square size={16} />
@@ -867,6 +1179,7 @@ function Models({
   updateLoadOption,
   onNotice,
   onRefresh,
+  onOpenSettings,
 }: {
   models: ModelDescriptor[];
   loaded: LoadedModel[];
@@ -877,38 +1190,104 @@ function Models({
   updateLoadOption: (modelId: string, field: keyof ModelLoadOptions, value: string) => void;
   onNotice: (message: string) => void;
   onRefresh: () => Promise<void>;
+  onOpenSettings: () => void;
 }) {
-  const [id, setId] = useState("");
-  const [path, setPath] = useState("");
-  const [query, setQuery] = useState("Gemma 3 1b");
-  const [results, setResults] = useState<HuggingFaceResult[]>([]);
-  const [sortBy, setSortBy] = useState<SearchSort>("downloads");
-  const [showAuxiliaryFiles, setShowAuxiliaryFiles] = useState(false);
+  const initialUiState = useRef(readStoredModelsUiState()).current;
+  const searchResultsRef = useRef<HTMLDivElement | null>(null);
+  const [id, setId] = useState(initialUiState.id);
+  const [path, setPath] = useState(initialUiState.path);
+  const [query, setQuery] = useState(initialUiState.query);
+  const [results, setResults] = useState<HuggingFaceResult[]>(initialUiState.results);
+  const [sortBy, setSortBy] = useState<SearchSort>(initialUiState.sortBy);
+  const [showAuxiliaryFiles, setShowAuxiliaryFiles] = useState(initialUiState.showAuxiliaryFiles);
   const [searching, setSearching] = useState(false);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
-  const [detailsModelId, setDetailsModelId] = useState<string | null>(null);
-  const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>([]);
+  const [detailsModelId, setDetailsModelId] = useState<string | null>(initialUiState.detailsModelId);
+  const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>(initialUiState.discoveredFiles);
   const [rescanning, setRescanning] = useState(false);
-  const [accessChecks, setAccessChecks] = useState<Record<string, AnonymousAccessCheck>>({});
+  const [accessChecks, setAccessChecks] = useState<Record<string, HuggingFaceAccessCheck>>(initialUiState.accessChecks);
+  const [searchResultsScrollTop, setSearchResultsScrollTop] = useState(initialUiState.searchResultsScrollTop);
+  const firstAccessTokenEffect = useRef(true);
+  const accessRequests = useRef(new Map<string, AbortController>());
 
-  async function checkAnonymousAccess(repo: string, filename: string) {
+  useEffect(() => {
+    if (firstAccessTokenEffect.current) {
+      firstAccessTokenEffect.current = false;
+      return;
+    }
+    setAccessChecks({});
+    for (const controller of accessRequests.current.values()) controller.abort();
+    accessRequests.current.clear();
+  }, [hfToken]);
+
+  useEffect(() => {
+    const requests = accessRequests.current;
+    return () => {
+      for (const controller of requests.values()) controller.abort();
+      requests.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    writeStoredModelsUiState({
+      id,
+      path,
+      query,
+      results,
+      sortBy,
+      showAuxiliaryFiles,
+      discoveredFiles,
+      accessChecks,
+      detailsModelId,
+      searchResultsScrollTop,
+    });
+  }, [id, path, query, results, sortBy, showAuxiliaryFiles, discoveredFiles, accessChecks, detailsModelId, searchResultsScrollTop]);
+
+  async function checkRepositoryAccess(repo: string, filename: string) {
     const key = downloadKey(repo, filename);
-    setAccessChecks((current) => ({ ...current, [key]: { pending: true, status: "unknown", message: "Checking anonymous access..." } }));
+    accessRequests.current.get(key)?.abort();
+    const controller = new AbortController();
+    accessRequests.current.set(key, controller);
+    const token = hfToken.trim();
+    setAccessChecks((current) => ({
+      ...current,
+      [key]: {
+        pending: true,
+        status: "unknown",
+        message: token ? "Checking token access..." : "Checking anonymous access...",
+      },
+    }));
     let message: string;
-    let status: AnonymousAccessCheck["status"] = "unknown";
+    let status: AccessCheckStatus = "unknown";
     try {
-      const response = await fetch(`${API_BASE}/runtime/huggingface/anonymous-access`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repo, filename }),
-      });
+      const response = token
+        ? await fetch(`${API_BASE}/runtime/huggingface/auth-check`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token, repo, filename, use_env_token: false }),
+            signal: controller.signal,
+          })
+        : await fetch(`${API_BASE}/runtime/huggingface/anonymous-access`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ repo, filename }),
+            signal: controller.signal,
+          });
       if (!response.ok) throw new Error("Access check failed");
       const result = await response.json();
-      message = result.message;
-      if (Object.hasOwn(anonymousAccessLabels, result.status)) status = result.status;
+      message = result.message ?? "Could not determine access. Try again.";
+      if (token) {
+        if (result.token_valid === false) status = "token_invalid";
+        else if (result.repository_checked && result.repository_access) status = "token_access";
+        else if (result.repository_checked) status = "token_no_access";
+      } else if (Object.hasOwn(accessCheckLabels, result.status)) {
+        status = result.status;
+      }
     } catch {
       message = "Access check failed. Check your connection and try again.";
     }
+    if (controller.signal.aborted) return;
+    accessRequests.current.delete(key);
     setAccessChecks((current) => ({ ...current, [key]: { pending: false, status, message } }));
   }
 
@@ -1190,6 +1569,11 @@ function Models({
   );
   const sortedFiles = useMemo(() => sortSearchFiles(visibleSearchFiles, sortBy), [visibleSearchFiles, sortBy]);
 
+  useLayoutEffect(() => {
+    const element = searchResultsRef.current;
+    if (element) element.scrollTop = searchResultsScrollTop;
+  }, [searchResultsScrollTop, sortedFiles.length]);
+
   return (
     <div className="pane">
       <div className="paneHeader">
@@ -1250,7 +1634,7 @@ function Models({
           <span>{searching ? "searching" : `${sortedFiles.length} files`}</span>
         </div>
         <div className="searchRow">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchHuggingFace()} />
+          <input aria-label="Search Hugging Face models" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && !searching && searchHuggingFace()} />
           <label className="sortControl">
             <span>Sort</span>
             <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SearchSort)}>
@@ -1269,15 +1653,15 @@ function Models({
             />
             <span>Show auxiliary files</span>
           </label>
-          <button onClick={searchHuggingFace}>
-            <Download size={16} />
+          <button onClick={searchHuggingFace} disabled={searching}>
+            <Search size={16} />
             Search
           </button>
         </div>
         {!showAuxiliaryFiles && auxiliaryFileCount > 0 && (
           <p className="filterHint">{auxiliaryFileCount} auxiliary files hidden: mmproj and mtp files are not primary chat models.</p>
         )}
-        <div className="searchResults">
+        <div className="searchResults" ref={searchResultsRef} onScroll={(event) => setSearchResultsScrollTop(event.currentTarget.scrollTop)}>
           {!results.length && (
             <EmptyState
               compact
@@ -1295,7 +1679,12 @@ function Models({
               <article className="searchModelCard" key={`${file.repo}-${file.filename}`}>
                 <div>
                   <h2>{file.filename}</h2>
-                  <p>{file.repo}</p>
+                  <p className="repoLinkLine">
+                    <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer">
+                      <ExternalLink size={14} />
+                      {file.repo}
+                    </a>
+                  </p>
                 </div>
                 <div className="modelFileMeta">
                   <span>{formatFileSize(file.size_bytes)}</span>
@@ -1303,17 +1692,31 @@ function Models({
                   {isAuxiliaryModelFile(file) && <span>auxiliary file</span>}
                   <span>{file.downloads ?? 0} source downloads</span>
                   <span>{file.likes ?? 0} source likes</span>
-                  {access && (
-                    <span
-                      className={`accessStatus ${access.pending ? "pending" : access.status}`}
-                      role="status"
-                      title={`${file.repo}: ${access.message}`}
-                      aria-label={`${file.repo}: ${access.message}`}
-                    >
-                      {access.pending ? "Checking access..." : anonymousAccessLabels[access.status]}
-                    </span>
-                  )}
                 </div>
+                {access && (
+                  <div className="accessFeedback" role="status" aria-live="polite">
+                    <div>
+                      <span className={`accessStatus ${access.pending ? "pending" : access.status}`}>
+                        {access.pending ? "Checking access..." : accessCheckLabels[access.status]}
+                      </span>
+                      {!access.pending && <p>{access.message}</p>}
+                    </div>
+                    {!access.pending && (
+                      <div className="accessLinks">
+                        <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer">
+                          <ExternalLink size={14} />
+                          {file.repo}
+                        </a>
+                        {["token_invalid", "token_no_access", "authentication_required", "restricted"].includes(access.status) && (
+                          <button className="secondaryAction" onClick={onOpenSettings}>
+                            <Settings size={14} />
+                            Token settings
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {job ? (
                   <div className="inlineDownload">
                     <span className={`jobStatus ${job.status}`}>{downloadStatusLabel(job.status)}</span>
@@ -1327,14 +1730,15 @@ function Models({
                 ) : null}
                 <div className={`downloadActions searchActions${canCancel ? " activeDownloadActions" : ""}`}>
                   <button
-                    title={`Check anonymous access to ${file.repo}`}
-                    aria-label={`Check anonymous access to ${file.repo}`}
+                    title={`Check access to ${file.repo}/${file.filename}`}
+                    aria-label={`Check access to ${file.repo}/${file.filename}`}
                     aria-busy={access?.pending ?? false}
-                    className="iconButton accessCheckButton"
+                    className="accessCheckButton"
                     disabled={access?.pending}
-                    onClick={() => checkAnonymousAccess(file.repo, file.filename)}
+                    onClick={() => checkRepositoryAccess(file.repo, file.filename)}
                   >
-                    {access?.pending ? <LoaderCircle size={17} className="accessSpinner" /> : <Info size={17} />}
+                    {access?.pending ? <LoaderCircle size={16} className="accessSpinner" /> : <ShieldCheck size={16} />}
+                    Check access
                   </button>
                   {job && canCancel ? (
                     <>
@@ -1818,13 +2222,37 @@ function SettingsPanel({
   onTokenChange: (token: string) => void;
   onNotice: (message: string) => void;
 }) {
-  const [authMessage, setAuthMessage] = useState("Token not checked.");
+  const initialSettingsUiState = useRef(readStoredSettingsUiState()).current;
+  const firstTokenEffect = useRef(true);
+  const [authMessage, setAuthMessage] = useState(initialSettingsUiState.authMessage);
+  const [authDiagnostic, setAuthDiagnostic] = useState<HuggingFaceAuthDiagnostic | null>(initialSettingsUiState.authDiagnostic);
+  const [checkingToken, setCheckingToken] = useState(false);
+  const authRequest = useRef<AbortController | null>(null);
   const [searchFilters, setSearchFilters] = useState<SearchFiltersConfig | null>(null);
-  const [blockedKeyword, setBlockedKeyword] = useState("");
+  const [blockedKeyword, setBlockedKeyword] = useState(initialSettingsUiState.blockedKeyword);
 
   useEffect(() => {
     refreshSearchFilters();
   }, []);
+
+  useEffect(() => {
+    if (firstTokenEffect.current) {
+      firstTokenEffect.current = false;
+      return;
+    }
+    authRequest.current?.abort();
+    setAuthDiagnostic(null);
+    setAuthMessage("Token not checked.");
+    setCheckingToken(false);
+  }, [hfToken]);
+
+  useEffect(() => {
+    return () => authRequest.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    writeJsonStorage(SETTINGS_UI_STORAGE_KEY, { authMessage, authDiagnostic, blockedKeyword });
+  }, [authMessage, authDiagnostic, blockedKeyword]);
 
   function updateToken(token: string) {
     window.localStorage.setItem("deeplocal:hf-token", token);
@@ -1858,17 +2286,44 @@ function SettingsPanel({
     }
   }
 
-  async function checkToken(repo?: string, filename?: string) {
-    const res = await fetch(`${API_BASE}/runtime/huggingface/auth-check`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: hfToken || null, repo, filename, use_env_token: false }),
-    });
-    const data = await res.json();
-    const message = data.message ?? "No response from auth check.";
-    setAuthMessage(message);
-    onNotice(message);
+  async function checkToken() {
+    authRequest.current?.abort();
+    const controller = new AbortController();
+    authRequest.current = controller;
+    setCheckingToken(true);
+    setAuthDiagnostic(null);
+    setAuthMessage("Checking token...");
+    try {
+      const res = await fetch(`${API_BASE}/runtime/huggingface/auth-check`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: hfToken || null, use_env_token: false }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error("Token check failed");
+      const data: HuggingFaceAuthDiagnostic = await res.json();
+      if (controller.signal.aborted) return;
+      setAuthDiagnostic(data);
+      setAuthMessage(data.message ?? "Could not verify the token. Try again.");
+    } catch {
+      if (!controller.signal.aborted) {
+        setAuthMessage("Token check failed. Check your connection and try again.");
+      }
+    } finally {
+      if (!controller.signal.aborted) setCheckingToken(false);
+    }
   }
+
+  const tokenStatus = checkingToken
+    ? "Checking..."
+    : typeof authDiagnostic?.token_valid === "boolean"
+      ? authDiagnostic.token_valid
+        ? "Valid"
+        : "Not valid"
+      : "Not checked";
+  const whoami = authDiagnostic?.user?.name
+    ? `${authDiagnostic.user.name}${authDiagnostic.user.display_name ? ` (${authDiagnostic.user.display_name})` : ""}`
+    : "Not available";
 
   return (
     <div className="pane settingsGrid">
@@ -1895,39 +2350,48 @@ function SettingsPanel({
           placeholder="hf_... or Bearer hf_..."
         />
       </label>
-      <section className="authPanel">
-        <h2>Hugging Face access</h2>
-        <p>{authMessage}</p>
-        <div className="headerActions">
-          <button onClick={() => checkToken()}>Check Token</button>
-          <button onClick={() => checkToken("google/gemma-3-1b-it-qat-q4_0-gguf", "gemma-3-1b-it-q4_0.gguf")}>
-            Check Gemma
-          </button>
-        </div>
-      </section>
-      <section className="filterPanel">
-        <div>
-          <h2>Search filter policy</h2>
-          <p>{searchFilters ? `${searchFilters.blocked_keywords.length} blocked keywords active.` : "Loading filter policy."}</p>
-        </div>
-        <div className="keywordEditor">
-          <input
-            placeholder="custom keyword"
-            value={blockedKeyword}
-            onChange={(event) => setBlockedKeyword(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && addBlockedKeyword()}
-          />
-          <button disabled={!blockedKeyword.trim()} onClick={addBlockedKeyword}>
-            <Plus size={15} />
-            Add
-          </button>
-        </div>
-        <div className="keywordList">
-          {(searchFilters?.blocked_keywords ?? []).map((keyword) => (
-            <span key={keyword}>{keyword}</span>
-          ))}
-        </div>
-      </section>
+      <div className="settingsPanels">
+        <section className="authPanel" aria-labelledby="auth-title">
+          <h2 id="auth-title">Hugging Face account</h2>
+          <p role="status">{authMessage}</p>
+          <div className="diagnosticGrid">
+            <span>Token</span>
+            <strong>{tokenStatus}</strong>
+            <span>Account</span>
+            <strong>{whoami}</strong>
+          </div>
+          <div className="headerActions">
+            <button className="secondaryAction" disabled={checkingToken} aria-busy={checkingToken} onClick={checkToken}>
+              {checkingToken ? <LoaderCircle size={16} className="accessSpinner" /> : <ShieldCheck size={16} />}
+              Check Token
+            </button>
+          </div>
+        </section>
+        <section className="filterPanel">
+          <div>
+            <h2>Search filter policy</h2>
+            <p>{searchFilters ? `${searchFilters.blocked_keywords.length} blocked keywords active.` : "Loading filter policy."}</p>
+          </div>
+          <div className="keywordEditor">
+            <input
+              aria-label="Custom blocked keyword"
+              placeholder="custom keyword"
+              value={blockedKeyword}
+              onChange={(event) => setBlockedKeyword(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && addBlockedKeyword()}
+            />
+            <button disabled={!blockedKeyword.trim()} onClick={addBlockedKeyword}>
+              <Plus size={15} />
+              Add
+            </button>
+          </div>
+          <div className="keywordList">
+            {(searchFilters?.blocked_keywords ?? []).map((keyword) => (
+              <span key={keyword}>{keyword}</span>
+            ))}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
