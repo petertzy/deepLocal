@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
@@ -167,6 +168,15 @@ type ModelLoadOptions = {
 type StoredModelLoadOptions = Record<string, ModelLoadOptions>;
 
 const API_BASE = "http://127.0.0.1:14567";
+
+function openRepository(event: React.MouseEvent<HTMLAnchorElement>, repo: string) {
+  const url = `https://huggingface.co/${repo}`;
+  if ("__TAURI_INTERNALS__" in window) {
+    event.preventDefault();
+    void openUrl(url);
+  }
+}
+
 const ACTIVE_TAB_STORAGE_KEY = "deeplocal:active-tab";
 const ACTIVE_CHAT_STORAGE_KEY = "deeplocal:active-chat-conversation";
 const APP_SCROLL_STORAGE_KEY = "deeplocal:app-scroll-positions";
@@ -1788,7 +1798,7 @@ function Models({
                 <div>
                   <h2>{file.filename}</h2>
                   <p className="repoLinkLine">
-                    <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer">
+                    <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer" onClick={(event) => openRepository(event, file.repo)}>
                       <ExternalLink size={14} />
                       {file.repo}
                     </a>
@@ -1811,7 +1821,7 @@ function Models({
                     </div>
                     {!access.pending && (
                       <div className="accessLinks">
-                        <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer">
+                        <a href={`https://huggingface.co/${file.repo}`} target="_blank" rel="noreferrer" onClick={(event) => openRepository(event, file.repo)}>
                           <ExternalLink size={14} />
                           {file.repo}
                         </a>
