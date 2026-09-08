@@ -26,6 +26,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  Sparkles,
   Square,
   Trash2,
   X,
@@ -68,6 +69,11 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   created_at?: string;
+};
+
+type OpenAiRequestMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
 };
 
 type ChatConversation = {
@@ -171,6 +177,9 @@ const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
+const CHAT_RESPONSE_MAX_TOKENS = 512;
+const PROMPT_SUGGESTION_SYSTEM_PROMPT =
+  "You suggest one useful, interesting question for a local AI chat. Return only one question. No bullets, no quotes, no explanations. Keep it under 180 characters.";
 
 function readJsonStorage<T>(key: string, fallback: T): T {
   try {
@@ -707,6 +716,7 @@ function Chat({
   const [streaming, setStreaming] = useState(() => readJsonStorage(CHAT_STREAMING_STORAGE_KEY, true));
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState(() => readStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY));
+  const [isSuggesting, setIsSuggesting] = useState(false);
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ChatConversation | null>(null);
   const [renamingConversation, setRenamingConversation] = useState(false);
@@ -714,6 +724,7 @@ function Chat({
   const [deletingConversation, setDeletingConversation] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const promptInputRef = useRef<HTMLInputElement | null>(null);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
   const registeredModelIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
@@ -810,7 +821,9 @@ function Chat({
       }
       const userMessage = await appendConversationMessage(conversation.id, "user", prompt);
       const nextMessages: ChatMessage[] = [...conversation.messages, userMessage];
-      updateConversationMessages(conversation.id, nextMessages, conversation.model_id ?? conversationModel);
+      const modelId = conversation.model_id ?? conversationModel;
+      const requestMessages = buildChatCompletionMessages(nextMessages, loadOptionsForModel(modelId));
+      updateConversationMessages(conversation.id, nextMessages, modelId);
 
       if (streaming) {
         const assistantDraft: ChatMessage = {
@@ -819,40 +832,44 @@ function Chat({
           content: "",
           created_at: new Date().toISOString(),
         };
-        updateConversationMessages(conversation.id, [...nextMessages, assistantDraft], conversation.model_id ?? conversationModel);
+        updateConversationMessages(conversation.id, [...nextMessages, assistantDraft], modelId);
 
         const controller = new AbortController();
         abortRef.current = controller;
         let content = "";
         let stopped = false;
+        let streamError: Error | null = null;
         try {
           await streamChatCompletion(
-            conversation.model_id ?? conversationModel,
-            nextMessages,
+            modelId,
+            requestMessages,
             controller.signal,
             (token) => {
               content += token;
-              updateConversationMessages(
-                conversation.id,
-                [...nextMessages, { ...assistantDraft, content }],
-                conversation.model_id ?? conversationModel,
-              );
+              updateConversationMessages(conversation.id, [...nextMessages, { ...assistantDraft, content }], modelId);
             },
           );
         } catch (error) {
           if (error instanceof DOMException && error.name === "AbortError") stopped = true;
-          else throw error;
+          else streamError = error instanceof Error ? error : new Error("Chat generation failed.");
         } finally {
           abortRef.current = null;
         }
 
+        if (streamError) {
+          const errorMessage = assistantLocalMessage(`I could not generate a reply. ${streamError.message}`);
+          updateConversationMessages(conversation.id, [...nextMessages, errorMessage], modelId);
+          onNotice(streamError.message);
+          return;
+        }
+
         if (content.trim()) {
           const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
-          updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], conversation.model_id ?? conversationModel);
+          updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], modelId);
         } else {
-          updateConversationMessages(conversation.id, nextMessages, conversation.model_id ?? conversationModel);
+          updateConversationMessages(conversation.id, nextMessages, modelId);
         }
-        onNotice(stopped ? "Chat generation stopped." : `Chat completed with ${conversation.model_id ?? conversationModel}.`);
+        onNotice(stopped ? "Chat generation stopped." : `Chat completed with ${modelId}.`);
         return;
       }
 
@@ -860,16 +877,18 @@ function Chat({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: conversation.model_id ?? conversationModel,
+          model: modelId,
           stream: false,
-          messages: nextMessages,
+          max_tokens: CHAT_RESPONSE_MAX_TOKENS,
+          messages: requestMessages,
         }),
       });
+      if (!res.ok) throw new Error((await res.text()) || "Chat request failed.");
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content ?? data.error ?? "No response";
       const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
-      updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], conversation.model_id ?? conversationModel);
-      onNotice(`Chat completed with ${conversation.model_id ?? conversationModel}.`);
+      updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], modelId);
+      onNotice(`Chat completed with ${modelId}.`);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") onNotice("Chat generation stopped.");
       else {
@@ -884,6 +903,27 @@ function Chat({
 
   function stopGeneration() {
     abortRef.current?.abort();
+  }
+
+  async function suggestPrompt() {
+    if (isGenerating || isSuggesting) return;
+    if (!conversationModel) {
+      onNotice("Load a model before asking AI for a suggested question.");
+      return;
+    }
+
+    setIsSuggesting(true);
+    try {
+      await ensureModelLoaded(conversationModel);
+      const prompt = await generatePromptSuggestion(conversationModel, messages, input);
+      setInput(prompt);
+      onNotice("AI suggested a question.");
+      window.setTimeout(() => promptInputRef.current?.focus(), 0);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Failed to suggest a question.");
+    } finally {
+      setIsSuggesting(false);
+    }
   }
 
   async function selectModel(modelId: string) {
@@ -1141,7 +1181,11 @@ function Chat({
             <input type="checkbox" checked={streaming} disabled={isGenerating} onChange={(event) => setStreaming(event.target.checked)} />
             <span>Streaming</span>
           </label>
-          <input aria-label="Chat prompt" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
+          <button className="promptIdeaButton" type="button" title="Suggest a question" aria-label="Suggest a question" disabled={isGenerating || isSuggesting || loadingModelId !== null} aria-busy={isSuggesting} onClick={suggestPrompt}>
+            {isSuggesting ? <LoaderCircle size={16} className="accessSpinner" /> : <Sparkles size={16} />}
+            {isSuggesting ? "Thinking" : "Suggest"}
+          </button>
+          <input ref={promptInputRef} aria-label="Chat prompt" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => event.key === "Enter" && send()} />
           {isGenerating ? (
             <button onClick={stopGeneration}>
               <Square size={16} />
@@ -2872,7 +2916,25 @@ function formatConversationTime(value: string) {
   return formatter.format(timestamp);
 }
 
-async function streamChatCompletion(model: string, messages: ChatMessage[], signal: AbortSignal, onToken: (token: string) => void) {
+function buildChatCompletionMessages(messages: ChatMessage[], _options: ModelLoadOptions): OpenAiRequestMessage[] {
+  return messages.map(({ role, content }) => ({ role, content }));
+}
+
+function assistantLocalMessage(content: string): ChatMessage {
+  return {
+    id: `assistant-${Date.now()}`,
+    role: "assistant",
+    content,
+    created_at: new Date().toISOString(),
+  };
+}
+
+async function streamChatCompletion(
+  model: string,
+  messages: OpenAiRequestMessage[],
+  signal: AbortSignal,
+  onToken: (token: string) => void,
+) {
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2892,10 +2954,13 @@ async function streamChatCompletion(model: string, messages: ChatMessage[], sign
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      buffer += decoder.decode();
+      break;
+    }
 
     buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split("\n\n");
+    const events = buffer.split(/\r?\n\r?\n/);
     buffer = events.pop() ?? "";
 
     for (const event of events) {
@@ -2911,6 +2976,77 @@ async function streamChatCompletion(model: string, messages: ChatMessage[], sign
       if (typeof token === "string") onToken(token);
     }
   }
+
+  if (buffer.trim()) {
+    const data = buffer
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+
+    if (data && data !== "[DONE]") {
+      const parsed = JSON.parse(data);
+      const token = parsed.choices?.[0]?.delta?.content;
+      if (typeof token === "string") onToken(token);
+    }
+  }
+}
+
+async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string) {
+  const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      temperature: 0.9,
+      top_p: 0.95,
+      max_tokens: 96,
+      stop: ["\n\n"],
+      messages: buildPromptSuggestionMessages(messages, currentDraft),
+    }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "";
+  const prompt = cleanSuggestedPrompt(String(content));
+  if (!prompt) throw new Error("AI did not return a suggested question. Try again.");
+  return prompt;
+}
+
+function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string): OpenAiRequestMessage[] {
+  const recentMessages = messages
+    .slice(-6)
+    .map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${truncatePromptContext(message.content)}`)
+    .join("\n");
+  const draft = currentDraft.trim();
+  const context = [
+    recentMessages ? `Recent conversation:\n${recentMessages}` : "Recent conversation: none yet.",
+    draft ? `Current input draft:\n${truncatePromptContext(draft)}` : "Current input draft: empty.",
+    "Write the next question the user might ask. Make it specific, useful, and a little interesting.",
+  ].join("\n\n");
+
+  return [
+    { role: "system", content: PROMPT_SUGGESTION_SYSTEM_PROMPT },
+    { role: "user", content: context },
+  ];
+}
+
+function truncatePromptContext(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 700 ? `${normalized.slice(0, 697)}...` : normalized;
+}
+
+function cleanSuggestedPrompt(value: string) {
+  return value
+    .trim()
+    .split(/\n+/)[0]
+    .replace(/^(suggested\s+question|question|prompt)\s*:\s*/i, "")
+    .replace(/^(?:[-*]|\d+[.)])\s+/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    .slice(0, 240);
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
