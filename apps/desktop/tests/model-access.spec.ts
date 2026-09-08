@@ -3,6 +3,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 const repo = "meta-llama/example-GGUF";
 const filename = "llama-example-Q4_K_M.gguf";
 const token = "hf_test_fixture_only";
+const modelId = "fixture-model";
+const aiSuggestion = "What can this local model do better than a small cloud model?";
 const authPath = "**/runtime/huggingface/auth-check";
 const anonymousPath = "**/runtime/huggingface/anonymous-access";
 
@@ -12,6 +14,10 @@ test.beforeEach(async ({ page }) => {
     const data: Record<string, unknown> = {
       "/health": { status: "ok" },
       "/runtime/hardware": { os: "darwin", arch: "arm64", cpu_brand: "Apple Silicon", total_ram_bytes: 16e9 },
+      "/runtime/models": [{ id: modelId, name: modelId, source: "local", format: "gguf", local_path: "/local/models/fixture.gguf" }],
+      "/runtime/models/loaded": [{ id: modelId, backend: "llama.cpp", status: "loaded" }],
+      "/runtime/downloads": [],
+      "/runtime/chat/conversations": [],
       "/runtime/models/directory": { path: "/local/models" },
       "/runtime/search-filters": { blocked_keywords: ["example-filter"] },
       "/runtime/huggingface/search": [{
@@ -161,6 +167,28 @@ test("restores the active chat page and unsent chat draft after refresh", async 
   await expect(page.getByRole("checkbox", { name: "Streaming" })).not.toBeChecked();
 });
 
+test("generates an editable chat question with the selected local model", async ({ page }) => {
+  let suggestionBody: Record<string, unknown> | undefined;
+  await page.route("**/v1/chat/completions", (route) => {
+    suggestionBody = route.request().postDataJSON();
+    return route.fulfill({ json: { choices: [{ message: { content: `Question: "${aiSuggestion}"` } }] } });
+  });
+  await navigate(page, "Chat");
+  await page.getByRole("button", { name: "Suggest a question" }).click();
+  await expect(page.getByRole("textbox", { name: "Chat prompt" })).toHaveValue(aiSuggestion);
+  await expect(page.getByRole("textbox", { name: "Chat prompt" })).toBeFocused();
+  expect(suggestionBody?.model).toBe(modelId);
+  expect(suggestionBody?.stream).toBe(false);
+  expect(suggestionBody?.max_tokens).toBe(96);
+  expect(suggestionBody?.messages).toEqual([
+    { role: "system", content: expect.stringContaining("suggest one useful") },
+    { role: "user", content: expect.stringContaining("Current input draft") },
+  ]);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Chat", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Chat prompt" })).toHaveValue(aiSuggestion);
+});
+
 test("uses in-app dialogs for conversation rename and delete", async ({ page }) => {
   const nativeDialogs: string[] = [];
   const conversation = {
@@ -249,6 +277,7 @@ test("uses in-app dialogs for discarding downloads and deleting models", async (
     return route.fulfill({ json: {} });
   });
 
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await navigate(page, "Models");
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   const discardDialog = page.getByRole("dialog", { name: "Discard download" });

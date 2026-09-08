@@ -1253,7 +1253,7 @@ progress {
 
 .composer {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 108px;
+  grid-template-columns: auto auto minmax(0, 1fr) 108px;
   align-items: center;
   gap: 10px;
   padding-top: 10px;
@@ -1275,6 +1275,19 @@ progress {
   width: 16px;
   min-height: 16px;
   accent-color: #2f6f62;
+}
+
+.composer .promptIdeaButton {
+  min-width: 104px;
+  border: 1px solid #b9d8d0;
+  color: #245f53;
+  background: #e7f5f0;
+  box-shadow: 0 1px 0 rgba(23, 32, 38, 0.05);
+}
+
+.composer .promptIdeaButton:hover:not(:disabled) {
+  border-color: #8fc7b7;
+  background: #d9eee7;
 }
 
 input,
@@ -1731,6 +1744,20 @@ label {
   .chatModelPicker,
   .emptyState {
     grid-template-columns: 1fr;
+  }
+
+  .composer {
+    grid-template-columns: auto auto;
+  }
+
+  .composer .promptIdeaButton {
+    justify-self: end;
+  }
+
+  .composer > input,
+  .composer > button:not(.promptIdeaButton) {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .conversationList {
