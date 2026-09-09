@@ -477,6 +477,27 @@ article p {
   font-weight: 650;
 }
 
+.modelIdField input[readonly],
+.modelPathField input[readonly] {
+  cursor: pointer;
+}
+
+.modelPathInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.modelPathField small {
+  color: #66727a;
+  font-size: 12px;
+}
+
+.modelPathField.pathDragOver input[readonly] {
+  border-color: #2d7569;
+  background: #e7f5f0;
+}
+
 .discoverPanel,
 .discoveredPanel,
 .manualRegistration,

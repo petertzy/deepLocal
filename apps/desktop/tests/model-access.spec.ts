@@ -73,8 +73,6 @@ test("preserves search results, drafts, diagnostics, and scroll positions betwee
   await expect(modelRow(page).getByRole("status")).toContainText("Public");
   await page.getByRole("combobox", { name: "Sort" }).selectOption("name");
   await page.getByRole("checkbox", { name: "Show auxiliary files" }).check();
-  await page.getByRole("textbox", { name: "Model ID", exact: true }).fill("draft-id");
-  await page.getByRole("textbox", { name: "GGUF file path", exact: true }).fill("/local/models/draft.gguf");
   await page.locator(".searchResults").evaluate((element) => {
     element.scrollTop = 180;
     element.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -96,8 +94,8 @@ test("preserves search results, drafts, diagnostics, and scroll positions betwee
   await expect(page.getByRole("textbox", { name: "Search Hugging Face models" })).toHaveValue("Llama example");
   await expect(page.getByRole("combobox", { name: "Sort" })).toHaveValue("name");
   await expect(page.getByRole("checkbox", { name: "Show auxiliary files" })).toBeChecked();
-  await expect(page.getByRole("textbox", { name: "Model ID", exact: true })).toHaveValue("draft-id");
-  await expect(page.getByRole("textbox", { name: "GGUF file path", exact: true })).toHaveValue("/local/models/draft.gguf");
+  await expect(page.getByRole("textbox", { name: "Model ID", exact: true })).toHaveValue("");
+  await expect(page.locator('.modelPathField .modelPathInput > input:not([type="file"])')).toHaveValue("");
   await expect(modelRow(page).getByRole("status")).toContainText("Public");
   await expect(page.locator(".searchModelCard")).toHaveCount(14);
   expect(searches).toBe(1);
@@ -113,8 +111,8 @@ test("preserves search results, drafts, diagnostics, and scroll positions betwee
   await expect(page.getByRole("textbox", { name: "Search Hugging Face models" })).toHaveValue("Llama example");
   await expect(page.getByRole("combobox", { name: "Sort" })).toHaveValue("name");
   await expect(page.getByRole("checkbox", { name: "Show auxiliary files" })).toBeChecked();
-  await expect(page.getByRole("textbox", { name: "Model ID", exact: true })).toHaveValue("draft-id");
-  await expect(page.getByRole("textbox", { name: "GGUF file path", exact: true })).toHaveValue("/local/models/draft.gguf");
+  await expect(page.getByRole("textbox", { name: "Model ID", exact: true })).toHaveValue("");
+  await expect(page.locator('.modelPathField .modelPathInput > input:not([type="file"])')).toHaveValue("");
   await expect(modelRow(page).getByRole("status")).toContainText("Public");
   await expect(modelRow(page).getByRole("link", { name: repo, exact: true }).first()).toHaveAttribute("href", `https://huggingface.co/${repo}`);
   await expect.poll(() => page.locator(".searchResults").evaluate((element) => element.scrollTop)).toBe(searchScroll);

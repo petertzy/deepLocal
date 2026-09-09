@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -1290,8 +1292,10 @@ function Models({
 }) {
   const initialUiState = useRef(readStoredModelsUiState()).current;
   const searchResultsRef = useRef<HTMLDivElement | null>(null);
+  const modelFileInputRef = useRef<HTMLInputElement | null>(null);
   const [id, setId] = useState(initialUiState.id);
   const [path, setPath] = useState(initialUiState.path);
+  const [pathDragOver, setPathDragOver] = useState(false);
   const [query, setQuery] = useState(initialUiState.query);
   const [results, setResults] = useState<HuggingFaceResult[]>(initialUiState.results);
   const [sortBy, setSortBy] = useState<SearchSort>(initialUiState.sortBy);
@@ -1309,6 +1313,19 @@ function Models({
   const [deletingModel, setDeletingModel] = useState(false);
   const firstAccessTokenEffect = useRef(true);
   const accessRequests = useRef(new Map<string, AbortController>());
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    listen<{ paths?: string[] }>("tauri://drag-drop", (event) => {
+      const droppedPath = event.payload.paths?.find((item) => /\.gguf$/i.test(item));
+      if (droppedPath) updateManualPath(droppedPath);
+      setPathDragOver(false);
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => unlisten?.();
+  }, []);
 
   useEffect(() => {
     if (firstAccessTokenEffect.current) {
@@ -1428,9 +1445,36 @@ function Models({
 
   function updateManualPath(value: string) {
     setPath(value);
-    if (!id.trim()) {
-      setId(modelIdFromPath(value));
+    setId(modelIdFromPath(value));
+  }
+
+  async function chooseModelFile() {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      modelFileInputRef.current?.click();
+      return;
     }
+    const selected = await open({
+      title: "Select GGUF model",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+    });
+    if (typeof selected === "string") updateManualPath(selected);
+  }
+
+  function handleBrowserFileSelection(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const filePath = file && (file as File & { path?: string }).path;
+    if (filePath) updateManualPath(filePath);
+    event.target.value = "";
+  }
+
+  function handleModelPathDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setPathDragOver(false);
+    const file = event.dataTransfer.files[0];
+    const filePath = file && (file as File & { path?: string }).path;
+    if (filePath) updateManualPath(filePath);
   }
 
   async function registerDiscoveredFile(file: DiscoveredModelFile) {
@@ -1934,21 +1978,42 @@ function Models({
           <span>existing local file</span>
         </div>
         <div className="modelTools">
-          <label>
+          <label className="modelIdField">
             <span>Model ID</span>
             <input
               placeholder="gemma-3-1b-local"
               value={id}
-              onChange={(event) => setId(event.target.value)}
+              readOnly
             />
           </label>
-          <label>
+          <label
+            className={`modelPathField${pathDragOver ? " pathDragOver" : ""}`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setPathDragOver(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => {
+              if (event.currentTarget === event.target) setPathDragOver(false);
+            }}
+            onDrop={handleModelPathDrop}
+          >
             <span>GGUF file path</span>
-            <input
-              placeholder={`${modelsDirectory}/model.gguf`}
-              value={path}
-              onChange={(event) => updateManualPath(event.target.value)}
-            />
+            <div className="modelPathInput">
+              <input
+                placeholder={`${modelsDirectory}/model.gguf`}
+                value={path}
+                readOnly
+                onClick={chooseModelFile}
+                title="Click to choose a GGUF file, or drag one here"
+              />
+              <input ref={modelFileInputRef} type="file" accept=".gguf" hidden onChange={handleBrowserFileSelection} />
+              <button type="button" className="secondaryAction" onClick={chooseModelFile}>
+                <FolderOpen size={15} />
+                Browse
+              </button>
+            </div>
+            <small>Click Browse or drop a .gguf file here.</small>
           </label>
           <button disabled={!canRegisterManualModel} onClick={register}>
             <Plus size={15} />
