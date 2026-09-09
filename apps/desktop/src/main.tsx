@@ -3307,14 +3307,19 @@ function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: st
     .map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${truncatePromptContext(message.content)}`)
     .join("\n");
   const draft = currentDraft.trim();
+  const targetLanguage = language.trim() || "English";
   const context = [
     recentMessages ? `Recent conversation:\n${recentMessages}` : "Recent conversation: none yet.",
     draft ? `Current input draft:\n${truncatePromptContext(draft)}` : "Current input draft: empty.",
     "Write the next question the user might ask. Make it specific, useful, and a little interesting.",
+    // Repeat the language requirement here so the small model sees it
+    // immediately before it generates — system-prompt-only instructions
+    // are often overridden by a long foreign-language context window.
+    `IMPORTANT: Your response MUST be written entirely in ${targetLanguage}. Do not use any other language.`,
   ].join("\n\n");
 
   return [
-    { role: "system", content: `${PROMPT_SUGGESTION_SYSTEM_PROMPT} Write the question in ${language.trim() || "English"}.` },
+    { role: "system", content: `${PROMPT_SUGGESTION_SYSTEM_PROMPT} Write the question in ${targetLanguage}. Always respond in ${targetLanguage} regardless of the conversation language.` },
     { role: "user", content: context },
   ];
 }
