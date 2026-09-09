@@ -2134,6 +2134,9 @@ pub struct OpenAiChatRequest {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub repeat_penalty: Option<f32>,
+    pub repeat_last_n: Option<i32>,
+    pub min_p: Option<f32>,
     #[serde(default, deserialize_with = "deserialize_stop_sequences")]
     pub stop: Vec<String>,
     pub seed: Option<u64>,
@@ -2195,6 +2198,9 @@ async fn chat_completions(
             max_tokens: body.max_tokens,
             stop: body.stop,
             seed: body.seed,
+            repeat_penalty: body.repeat_penalty.unwrap_or(1.1),
+            repeat_last_n: body.repeat_last_n.unwrap_or(256),
+            min_p: body.min_p.unwrap_or(0.05),
         },
         stream: body.stream,
     };

@@ -47,6 +47,24 @@ pub struct GenerationParameters {
     pub max_tokens: Option<u32>,
     pub stop: Vec<String>,
     pub seed: Option<u64>,
+    #[serde(default = "default_repeat_penalty")]
+    pub repeat_penalty: f32,
+    #[serde(default = "default_repeat_last_n")]
+    pub repeat_last_n: i32,
+    #[serde(default = "default_min_p")]
+    pub min_p: f32,
+}
+
+fn default_repeat_penalty() -> f32 {
+    1.1
+}
+
+fn default_repeat_last_n() -> i32 {
+    256
+}
+
+fn default_min_p() -> f32 {
+    0.05
 }
 
 impl Default for GenerationParameters {
@@ -57,6 +75,9 @@ impl Default for GenerationParameters {
             max_tokens: Some(512),
             stop: Vec::new(),
             seed: None,
+            repeat_penalty: default_repeat_penalty(),
+            repeat_last_n: default_repeat_last_n(),
+            min_p: default_min_p(),
         }
     }
 }

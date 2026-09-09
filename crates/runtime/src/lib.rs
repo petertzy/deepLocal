@@ -559,6 +559,9 @@ impl InferenceBackend for LlamaCppBackend {
                 "top_p": request.parameters.top_p,
                 "max_tokens": request.parameters.max_tokens,
                 "stop": request.parameters.stop
+                ,"repeat_penalty": request.parameters.repeat_penalty,
+                "repeat_last_n": request.parameters.repeat_last_n,
+                "min_p": request.parameters.min_p
             }))
             .send()
             .await?

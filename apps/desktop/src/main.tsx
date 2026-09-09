@@ -195,6 +195,9 @@ const CHAT_RESPONSE_MAX_TOKENS = 4096;
 const SUGGESTION_TIMEOUT_MS = 30_000;
 const CHAT_TEMPERATURE = 0.35;
 const CHAT_TOP_P = 0.9;
+const CHAT_REPEAT_PENALTY = 1.1;
+const CHAT_REPEAT_LAST_N = 256;
+const CHAT_MIN_P = 0.05;
 const CHAT_SYSTEM_PROMPT =
   "You are a helpful local assistant. Answer in the user's language. Be accurate and concise. " +
   "When asked for code, produce complete valid code, avoid repeating tokens or unfinished fragments, and do not claim that code is complete when it is not.";
@@ -3085,6 +3088,9 @@ type ChatGenerationOptions = {
   temperature: number;
   top_p: number;
   max_tokens: number;
+  repeat_penalty: number;
+  repeat_last_n: number;
+  min_p: number;
 };
 
 function estimateMessageTokens(message: OpenAiRequestMessage) {
@@ -3115,6 +3121,9 @@ function chatGenerationOptions(messages: OpenAiRequestMessage[], options: ModelL
     temperature: CHAT_TEMPERATURE,
     top_p: CHAT_TOP_P,
     max_tokens: Math.max(512, Math.min(CHAT_RESPONSE_MAX_TOKENS, availableOutputTokens)),
+    repeat_penalty: CHAT_REPEAT_PENALTY,
+    repeat_last_n: CHAT_REPEAT_LAST_N,
+    min_p: CHAT_MIN_P,
   };
 }
 
