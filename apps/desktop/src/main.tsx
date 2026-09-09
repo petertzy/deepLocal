@@ -2008,13 +2008,12 @@ function Models({
                 title="Click to choose a GGUF file, or drag one here"
               />
               <input ref={modelFileInputRef} type="file" accept=".gguf" hidden onChange={handleBrowserFileSelection} />
-              <button type="button" className="secondaryAction" onClick={chooseModelFile}>
-                <FolderOpen size={15} />
-                Browse
-              </button>
             </div>
-            <small>Click Browse or drop a .gguf file here.</small>
           </label>
+          <button type="button" className="secondaryAction browseModelButton" onClick={chooseModelFile}>
+            <FolderOpen size={15} />
+            Browse
+          </button>
           <button disabled={!canRegisterManualModel} onClick={register}>
             <Plus size={15} />
             Register

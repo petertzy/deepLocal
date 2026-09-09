@@ -460,7 +460,7 @@ article p {
 
 .modelTools {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) 1fr auto;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 10px;
 }
@@ -484,8 +484,11 @@ article p {
 
 .modelPathInput {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  min-width: 0;
+}
+
+.browseModelButton {
+  min-width: 112px;
 }
 
 .modelPathField small {
