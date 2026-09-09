@@ -403,7 +403,7 @@ function defaultLoadOptions(hardware: HardwareProfile | null): ModelLoadOptions 
   const isAppleSilicon =
     hardware?.os.toLowerCase().includes("darwin") && hardware?.arch.toLowerCase().includes("arm");
   return {
-    context_length: isAppleSilicon ? 4096 : 2048,
+    context_length: 16384,
     gpu_layers: isAppleSilicon ? -1 : 0,
   };
 }
@@ -425,7 +425,7 @@ function readStoredModelLoadOptions(): StoredModelLoadOptions {
     return Object.fromEntries(
       Object.entries(parsed).map(([modelId, options]) => [
         modelId,
-        sanitizeLoadOptions(options, { context_length: 4096, gpu_layers: -1 }),
+        sanitizeLoadOptions(options, { context_length: 16384, gpu_layers: -1 }),
       ]),
     );
   } catch {
