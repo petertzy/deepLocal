@@ -621,7 +621,7 @@ function App() {
         </header>
 
         {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => selectTab("models")} />}
-        {tab === "chat" && (
+        <RetainedPage active={tab === "chat"}>
           <Chat
             models={models}
             loaded={loaded}
@@ -631,7 +631,7 @@ function App() {
             onNotice={(message) => updateNotice("chat", message)}
             onRefresh={refresh}
           />
-        )}
+        </RetainedPage>
         <RetainedPage active={tab === "models"}>
           <Models
             models={models}
