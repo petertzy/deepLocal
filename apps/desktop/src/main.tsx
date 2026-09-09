@@ -917,6 +917,17 @@ function Chat({
     abortRef.current?.abort();
   }
 
+  async function copyAssistantContent(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      onNotice("Copied AI response.");
+      return true;
+    } catch {
+      onNotice("Copy failed. Check clipboard permissions.");
+      return false;
+    }
+  }
+
   async function suggestPrompt() {
     if (isGenerating || isSuggesting) return;
     if (!conversationModel) {
@@ -1140,47 +1151,57 @@ function Chat({
             messages.map((message, index) => (
               <div className={`message ${message.role}`} key={message.id ?? `${message.role}-${index}`}>
                 {message.role === "assistant" ? (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      code({ className, children, ...props }) {
-                        const language = /language-(\w+)/.exec(className ?? "")?.[1];
-                        const code = String(children).replace(/\n$/, "");
+                  <>
+                    <div className="messageContent">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({ className, children, ...props }) {
+                            const language = /language-(\w+)/.exec(className ?? "")?.[1];
+                            const code = String(children).replace(/\n$/, "");
 
-                        if (language) {
-                          return (
-                            <SyntaxHighlighter
-                              PreTag="div"
-                              className="codeBlock"
-                              language={language}
-                              style={oneLight}
-                              customStyle={{
-                                margin: 0,
-                                padding: 0,
-                                background: "transparent",
-                              }}
-                              codeTagProps={{
-                                style: {
-                                  background: "transparent",
-                                  fontFamily: "inherit",
-                                },
-                              }}
-                            >
-                              {code}
-                            </SyntaxHighlighter>
-                          );
-                        }
+                            if (language) {
+                              return (
+                                <div className="codeBlockContainer">
+                                  <SyntaxHighlighter
+                                    PreTag="div"
+                                    className="codeBlock"
+                                    language={language}
+                                    style={oneLight}
+                                    customStyle={{
+                                      margin: 0,
+                                      padding: 0,
+                                      background: "transparent",
+                                    }}
+                                    codeTagProps={{
+                                      style: {
+                                        background: "transparent",
+                                        fontFamily: "inherit",
+                                      },
+                                    }}
+                                  >
+                                    {code}
+                                  </SyntaxHighlighter>
+                                  <CopyButton onCopy={() => copyAssistantContent(code)} />
+                                </div>
+                              );
+                            }
 
-                        return (
-                          <code className={className} {...props}>
-                            {children}
-                          </code>
-                        );
-                      },
-                    }}
-                  >
-                    {normalizeMarkdown(message.content)}
-                  </ReactMarkdown>
+                            return (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                        }}
+                      >
+                        {normalizeMarkdown(message.content)}
+                      </ReactMarkdown>
+                    </div>
+                    <div className="messageActions">
+                      <CopyButton disabled={!message.content.trim()} onCopy={() => copyAssistantContent(message.content)} />
+                    </div>
+                  </>
                 ) : (
                   message.content
                 )}

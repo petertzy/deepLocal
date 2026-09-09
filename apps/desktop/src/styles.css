@@ -1196,6 +1196,23 @@ progress {
   background: #f1f3f4;
 }
 
+.messageContent {
+  min-width: 0;
+}
+
+.messageActions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
+.messageActions .copyButton {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .message.assistant p,
 .message.assistant ul,
 .message.assistant ol,
@@ -1251,6 +1268,24 @@ progress {
   min-width: max-content;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.codeBlockContainer {
+  position: relative;
+}
+
+.codeBlockContainer .copyButton {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.message.assistant .codeBlockContainer .codeBlock {
+  padding-top: 52px !important;
 }
 
 .message.assistant table {
