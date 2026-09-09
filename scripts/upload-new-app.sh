@@ -8,10 +8,10 @@ shasum -a 256 dist/deepLocal-macos.zip
 shasum -a 256 dist/deepLocal-macos.dmg
 echo ""
 
-gh release create v0.1.2 \
+gh release create v0.1.3 \
   dist/deepLocal-macos.zip \
   dist/deepLocal-macos.dmg \
-  --title "deepLocal v0.1.1" \
+  --title "deepLocal v0.1.3" \
   --notes "Second packaged macOS preview release.
 
 Highlights:
@@ -32,4 +32,4 @@ SHA256:
 
 echo ""
 echo "=== Release ==="
-gh release view v0.1.1
+gh release view v0.1.3
