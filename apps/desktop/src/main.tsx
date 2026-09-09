@@ -186,6 +186,7 @@ const CHAT_INPUT_STORAGE_KEY = "deeplocal:chat-input";
 const CHAT_SHOW_CONVERSATIONS_STORAGE_KEY = "deeplocal:chat-show-conversations";
 const CHAT_STREAMING_STORAGE_KEY = "deeplocal:chat-streaming";
 const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
+const CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY = "deeplocal:chat-suggestion-language";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
@@ -455,6 +456,7 @@ function App() {
   const [downloads, setDownloads] = useState<DownloadJob[]>([]);
   const [modelsDirectory, setModelsDirectory] = useState("./models");
   const [hfToken, setHfToken] = useState(() => window.localStorage.getItem("deeplocal:hf-token") ?? "");
+  const [suggestionLanguage, setSuggestionLanguage] = useState(() => readStringStorage(CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY, "English"));
   const [notices, setNotices] = useState<Partial<Record<Tab, string>>>({});
   const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
   const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
@@ -615,6 +617,7 @@ function App() {
             models={models}
             loaded={loaded}
             loadOptionsForModel={loadOptionsForModel}
+            suggestionLanguage={suggestionLanguage}
             onOpenModels={() => selectTab("models")}
             onNotice={(message) => updateNotice("chat", message)}
             onRefresh={refresh}
@@ -636,7 +639,18 @@ function App() {
         </RetainedPage>
         {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onOpenModels={() => selectTab("models")} onNotice={(message) => updateNotice("server", message)} />}
         <RetainedPage active={tab === "settings"}>
-          <SettingsPanel modelsDirectory={modelsDirectory} hfToken={hfToken} onTokenChange={setHfToken} onNotice={(message) => updateNotice("settings", message)} />
+          <SettingsPanel
+            modelsDirectory={modelsDirectory}
+            hfToken={hfToken}
+            suggestionLanguage={suggestionLanguage}
+            onTokenChange={setHfToken}
+            onSuggestionLanguageChange={(language) => {
+              const nextLanguage = language.trim() || "English";
+              setSuggestionLanguage(nextLanguage);
+              writeStringStorage(CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY, nextLanguage);
+            }}
+            onNotice={(message) => updateNotice("settings", message)}
+          />
         </RetainedPage>
       </section>
     </main>
@@ -715,6 +729,7 @@ function Chat({
   models,
   loaded,
   loadOptionsForModel,
+  suggestionLanguage,
   onOpenModels,
   onNotice,
   onRefresh,
@@ -722,6 +737,7 @@ function Chat({
   models: ModelDescriptor[];
   loaded: LoadedModel[];
   loadOptionsForModel: (modelId: string) => ModelLoadOptions;
+  suggestionLanguage: string;
   onOpenModels: () => void;
   onNotice: (message: string) => void;
   onRefresh: () => Promise<void>;
@@ -945,7 +961,7 @@ function Chat({
     setIsSuggesting(true);
     try {
       await ensureModelLoaded(conversationModel);
-      const prompt = await generatePromptSuggestion(conversationModel, messages, input);
+      const prompt = await generatePromptSuggestion(conversationModel, messages, input, suggestionLanguage);
       setInput(prompt);
       onNotice("AI suggested a question.");
       window.setTimeout(() => promptInputRef.current?.focus(), 0);
@@ -2591,12 +2607,16 @@ function CopyButton({ disabled, onCopy }: { disabled?: boolean; onCopy: () => Pr
 function SettingsPanel({
   modelsDirectory,
   hfToken,
+  suggestionLanguage,
   onTokenChange,
+  onSuggestionLanguageChange,
   onNotice,
 }: {
   modelsDirectory: string;
   hfToken: string;
+  suggestionLanguage: string;
   onTokenChange: (token: string) => void;
+  onSuggestionLanguageChange: (language: string) => void;
   onNotice: (message: string) => void;
 }) {
   const initialSettingsUiState = useRef(readStoredSettingsUiState()).current;
@@ -2725,6 +2745,16 @@ function SettingsPanel({
           value={hfToken}
           onChange={(event) => updateToken(event.target.value)}
           placeholder="hf_... or Bearer hf_..."
+        />
+      </label>
+      <label>
+        Suggest language
+        <input
+          aria-label="Suggest language"
+          value={suggestionLanguage}
+          onChange={(event) => onSuggestionLanguageChange(event.target.value)}
+          onBlur={() => onSuggestionLanguageChange(suggestionLanguage)}
+          placeholder="English, Chinese, or 中文"
         />
       </label>
       <div className="settingsPanels">
@@ -3100,7 +3130,7 @@ async function streamChatCompletion(
   }
 }
 
-async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string) {
+async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string) {
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -3111,7 +3141,7 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
       top_p: 0.95,
       max_tokens: 96,
       stop: ["\n\n"],
-      messages: buildPromptSuggestionMessages(messages, currentDraft),
+      messages: buildPromptSuggestionMessages(messages, currentDraft, language),
     }),
   });
   if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
@@ -3123,7 +3153,7 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
   return prompt;
 }
 
-function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string): OpenAiRequestMessage[] {
+function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string, language: string): OpenAiRequestMessage[] {
   const recentMessages = messages
     .slice(-6)
     .map((message) => `${message.role === "assistant" ? "Assistant" : "User"}: ${truncatePromptContext(message.content)}`)
@@ -3136,7 +3166,7 @@ function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: st
   ].join("\n\n");
 
   return [
-    { role: "system", content: PROMPT_SUGGESTION_SYSTEM_PROMPT },
+    { role: "system", content: `${PROMPT_SUGGESTION_SYSTEM_PROMPT} Write the question in ${language.trim() || "English"}.` },
     { role: "user", content: context },
   ];
 }

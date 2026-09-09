@@ -171,6 +171,8 @@ test("generates an editable chat question with the selected local model", async 
     suggestionBody = route.request().postDataJSON();
     return route.fulfill({ json: { choices: [{ message: { content: `Question: "${aiSuggestion}"` } }] } });
   });
+  await navigate(page, "Settings");
+  await page.getByLabel("Suggest language", { exact: true }).fill("Chinese");
   await navigate(page, "Chat");
   await page.getByRole("button", { name: "Suggest a question" }).click();
   await expect(page.getByRole("textbox", { name: "Chat prompt" })).toHaveValue(aiSuggestion);
@@ -179,7 +181,7 @@ test("generates an editable chat question with the selected local model", async 
   expect(suggestionBody?.stream).toBe(false);
   expect(suggestionBody?.max_tokens).toBe(96);
   expect(suggestionBody?.messages).toEqual([
-    { role: "system", content: expect.stringContaining("suggest one useful") },
+    { role: "system", content: expect.stringMatching(/suggest one useful.*Chinese/) },
     { role: "user", content: expect.stringContaining("Current input draft") },
   ]);
   await page.reload();
