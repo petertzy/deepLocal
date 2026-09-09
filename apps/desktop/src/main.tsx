@@ -189,7 +189,12 @@ const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
-const CHAT_RESPONSE_MAX_TOKENS = 512;
+const CHAT_RESPONSE_MAX_TOKENS = 2048;
+const CHAT_TEMPERATURE = 0.35;
+const CHAT_TOP_P = 0.9;
+const CHAT_SYSTEM_PROMPT =
+  "You are a helpful local assistant. Answer in the user's language. Be accurate and concise. " +
+  "When asked for code, produce complete valid code, avoid repeating tokens or unfinished fragments, and do not claim that code is complete when it is not.";
 const PROMPT_SUGGESTION_SYSTEM_PROMPT =
   "You suggest one useful, interesting question for a local AI chat. Return only one question. No bullets, no quotes, no explanations. Keep it under 180 characters.";
 
@@ -891,6 +896,8 @@ function Chat({
         body: JSON.stringify({
           model: modelId,
           stream: false,
+          temperature: CHAT_TEMPERATURE,
+          top_p: CHAT_TOP_P,
           max_tokens: CHAT_RESPONSE_MAX_TOKENS,
           messages: requestMessages,
         }),
@@ -3012,7 +3019,10 @@ function formatConversationTime(value: string) {
 }
 
 function buildChatCompletionMessages(messages: ChatMessage[], _options: ModelLoadOptions): OpenAiRequestMessage[] {
-  return messages.map(({ role, content }) => ({ role, content }));
+  return [
+    { role: "system", content: CHAT_SYSTEM_PROMPT },
+    ...messages.map(({ role, content }) => ({ role, content })),
+  ];
 }
 
 function assistantLocalMessage(content: string): ChatMessage {
@@ -3037,6 +3047,9 @@ async function streamChatCompletion(
     body: JSON.stringify({
       model,
       stream: true,
+      temperature: CHAT_TEMPERATURE,
+      top_p: CHAT_TOP_P,
+      max_tokens: CHAT_RESPONSE_MAX_TOKENS,
       messages,
     }),
   });
