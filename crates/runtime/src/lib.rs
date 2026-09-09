@@ -284,7 +284,7 @@ fn truncate_error(message: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::llama_startup_error_message;
+    use super::{llama_startup_error_message, parse_llama_sse_event};
 
     #[test]
     fn startup_errors_suggest_smaller_context_for_context_failures() {
@@ -302,6 +302,30 @@ mod tests {
     fn startup_errors_suggest_memory_adjustments_for_allocation_failures() {
         let message = llama_startup_error_message("not ready", Some(b"out of memory"));
         assert!(message.contains("fewer GPU layers"));
+    }
+
+    #[test]
+    fn parses_llama_sse_content_delta() {
+        let mut index = 0;
+        let token = parse_llama_sse_event(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+            &mut index,
+        )
+        .expect("parse SSE event")
+        .expect("content token");
+        assert_eq!(token.text, "Hello");
+        assert_eq!(token.index, 0);
+        assert!(!token.done);
+    }
+
+    #[test]
+    fn parses_llama_sse_done_event() {
+        let mut index = 3;
+        let token = parse_llama_sse_event("data: [DONE]\n\n", &mut index)
+            .expect("parse SSE event")
+            .expect("done token");
+        assert_eq!(token.index, 3);
+        assert!(token.done);
     }
 }
 
@@ -359,6 +383,49 @@ impl Drop for LlamaCppBackend {
             let _ = process.child.start_kill();
         }
     }
+}
+
+fn take_sse_event(buffer: &mut String) -> Option<String> {
+    let (end, separator_length) = match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
+        (Some(line_end), Some(carriage_return_end)) if carriage_return_end < line_end => {
+            (carriage_return_end, 4)
+        }
+        (Some(line_end), _) => (line_end, 2),
+        (None, Some(carriage_return_end)) => (carriage_return_end, 4),
+        (None, None) => return None,
+    };
+    Some(buffer.drain(..end + separator_length).collect())
+}
+
+fn parse_llama_sse_event(event: &str, index: &mut usize) -> anyhow::Result<Option<GeneratedToken>> {
+    let data = event
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() {
+        return Ok(None);
+    }
+    if data == "[DONE]" {
+        return Ok(Some(GeneratedToken {
+            text: String::new(),
+            index: *index,
+            done: true,
+        }));
+    }
+
+    let payload: serde_json::Value = serde_json::from_str(&data)?;
+    let Some(text) = payload["choices"][0]["delta"]["content"].as_str() else {
+        return Ok(None);
+    };
+    let token = GeneratedToken {
+        text: text.to_string(),
+        index: *index,
+        done: false,
+    };
+    *index += 1;
+    Ok(Some(token))
 }
 
 #[async_trait]
@@ -486,7 +553,7 @@ impl InferenceBackend for LlamaCppBackend {
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .json(&serde_json::json!({
                 "model": request.model,
-                "stream": false,
+                "stream": true,
                 "messages": messages,
                 "temperature": request.parameters.temperature,
                 "top_p": request.parameters.top_p,
@@ -495,26 +562,61 @@ impl InferenceBackend for LlamaCppBackend {
             }))
             .send()
             .await?
-            .error_for_status()?
-            .json::<serde_json::Value>()
-            .await?;
-        let text = response["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let tokens = vec![
-            Ok(GeneratedToken {
-                text,
-                index: 0,
-                done: false,
-            }),
-            Ok(GeneratedToken {
-                text: String::new(),
-                index: 1,
-                done: true,
-            }),
-        ];
-        Ok(stream::iter(tokens).boxed())
+            .error_for_status()?;
+        let response_stream = response.bytes_stream();
+        let tokens = futures::stream::unfold(
+            (response_stream, String::new(), 0usize, false),
+            |(mut response_stream, mut buffer, mut index, mut done)| async move {
+                loop {
+                    if let Some(event) = take_sse_event(&mut buffer) {
+                        match parse_llama_sse_event(&event, &mut index) {
+                            Ok(Some(token)) => {
+                                if token.done {
+                                    done = true;
+                                }
+                                return Some((Ok(token), (response_stream, buffer, index, done)));
+                            }
+                            Ok(None) => continue,
+                            Err(error) => {
+                                done = true;
+                                return Some((Err(error), (response_stream, buffer, index, done)));
+                            }
+                        }
+                    }
+
+                    if done {
+                        return None;
+                    }
+
+                    match response_stream.next().await {
+                        Some(Ok(bytes)) => buffer.push_str(&String::from_utf8_lossy(&bytes)),
+                        Some(Err(error)) => {
+                            done = true;
+                            return Some((
+                                Err(anyhow::anyhow!(error)),
+                                (response_stream, buffer, index, done),
+                            ));
+                        }
+                        None => {
+                            done = true;
+                            if buffer.trim().is_empty() {
+                                return Some((
+                                    Ok(GeneratedToken {
+                                        text: String::new(),
+                                        index,
+                                        done: true,
+                                    }),
+                                    (response_stream, buffer, index, done),
+                                ));
+                            }
+                            buffer.push_str("\n\n");
+                        }
+                    }
+                }
+            },
+        )
+        .boxed();
+        Ok(tokens)
     }
 
     async fn unload(&self, model_id: &str) -> anyhow::Result<()> {
