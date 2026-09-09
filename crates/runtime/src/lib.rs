@@ -5,7 +5,7 @@ use deeplocal_core::{
 };
 use futures::{StreamExt, stream::BoxStream};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -14,7 +14,8 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::RwLock;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::{Mutex, RwLock};
 use tokio::{process::Command, time::sleep};
 use tokio_stream as stream;
 
@@ -224,6 +225,7 @@ pub struct LlamaCppBackend {
 struct LlamaProcess {
     port: u16,
     child: tokio::process::Child,
+    logs: Arc<Mutex<VecDeque<String>>>,
 }
 
 fn resolve_binary_path(binary: &PathBuf) -> Option<PathBuf> {
@@ -499,22 +501,51 @@ impl InferenceBackend for LlamaCppBackend {
                 self.binary.display()
             )
         })?;
+
+        let logs = Arc::new(Mutex::new(VecDeque::with_capacity(300)));
+        if let Some(stdout) = child.stdout.take() {
+            let logs = logs.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let mut lock = logs.lock().await;
+                    if lock.len() >= 300 {
+                        lock.pop_front();
+                    }
+                    lock.push_back(line);
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let logs = logs.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let mut lock = logs.lock().await;
+                    if lock.len() >= 300 {
+                        lock.pop_front();
+                    }
+                    lock.push_back(line);
+                }
+            });
+        }
+
         if let Err(error) = self.wait_until_ready(port).await {
             let _ = child.kill().await;
-            let stderr = child
-                .wait_with_output()
-                .await
-                .ok()
-                .map(|output| output.stderr);
+            let captured = logs.lock().await.iter().cloned().collect::<Vec<_>>().join("\n");
             return Err(anyhow::anyhow!(llama_startup_error_message(
                 &error.to_string(),
-                stderr.as_deref()
+                if captured.is_empty() {
+                    None
+                } else {
+                    Some(captured.as_bytes())
+                }
             )));
         }
         self.processes
             .write()
             .await
-            .insert(model.id.clone(), LlamaProcess { port, child });
+            .insert(model.id.clone(), LlamaProcess { port, child, logs });
 
         Ok(ModelHandle {
             id: model.id,
@@ -527,13 +558,21 @@ impl InferenceBackend for LlamaCppBackend {
         &self,
         request: GenerationRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<GeneratedToken>>> {
-        let port = self
-            .processes
-            .read()
-            .await
-            .get(&request.model)
-            .map(|process| process.port)
-            .ok_or_else(|| anyhow::anyhow!("llama.cpp model is not loaded: {}", request.model))?;
+        let port = {
+            let mut processes = self.processes.write().await;
+            let process = processes
+                .get_mut(&request.model)
+                .ok_or_else(|| anyhow::anyhow!("llama.cpp model is not loaded: {}", request.model))?;
+
+            if let Ok(Some(status)) = process.child.try_wait() {
+                let logs = process.logs.lock().await.iter().cloned().collect::<Vec<_>>().join("\n");
+                processes.remove(&request.model);
+                anyhow::bail!(
+                    "llama-server exited unexpectedly ({status}). Recent logs:\n{logs}"
+                );
+            }
+            process.port
+        };
         let messages: Vec<_> = request
             .messages
             .iter()
@@ -549,7 +588,9 @@ impl InferenceBackend for LlamaCppBackend {
                 })
             })
             .collect();
-        let response = reqwest::Client::new()
+        let response = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()?
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .json(&serde_json::json!({
                 "model": request.model,

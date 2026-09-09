@@ -2220,32 +2220,33 @@ async fn chat_completions(
                     .into_response();
             }
         };
-        let sse = stream.map(move |token| {
-            let token = token
-                .map_err(|error| error.to_string())
-                .unwrap_or_else(|error| deeplocal_core::GeneratedToken {
-                    text: error,
-                    index: 0,
-                    done: true,
-                });
-            if token.done {
-                Ok::<_, Infallible>(Event::default().data("[DONE]"))
-            } else {
-                Ok(Event::default().data(
-                    serde_json::json!({
-                        "id": format!("chatcmpl-{}", Uuid::new_v4()),
-                        "object": "chat.completion.chunk",
-                        "created": Utc::now().timestamp(),
-                        "model": body.model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": { "content": token.text },
-                            "finish_reason": null
-                        }]
-                    })
-                    .to_string(),
-                ))
+        let sse = stream.map(move |token| match token {
+            Ok(token) => {
+                if token.done {
+                    Ok::<_, Infallible>(Event::default().data("[DONE]"))
+                } else {
+                    Ok(Event::default().data(
+                        serde_json::json!({
+                            "id": format!("chatcmpl-{}", Uuid::new_v4()),
+                            "object": "chat.completion.chunk",
+                            "created": Utc::now().timestamp(),
+                            "model": body.model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "content": token.text },
+                                "finish_reason": null
+                            }]
+                        })
+                        .to_string(),
+                    ))
+                }
             }
+            Err(error) => Ok(Event::default().data(
+                serde_json::json!({
+                    "error": error.to_string()
+                })
+                .to_string(),
+            )),
         });
         return Sse::new(sse)
             .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)))

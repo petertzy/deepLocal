@@ -928,10 +928,17 @@ function Chat({
         if (content.trim()) {
           const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
           updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], modelId);
+          onNotice(stopped ? "Chat generation stopped." : `Chat completed with ${modelId}.`);
+        } else if (!stopped) {
+          const errorMessage = assistantLocalMessage(
+            "The model returned an empty response. Check if the model is running properly or try a different prompt.",
+          );
+          updateConversationMessages(conversation.id, [...nextMessages, errorMessage], modelId);
+          onNotice("Model returned an empty response.");
         } else {
           updateConversationMessages(conversation.id, nextMessages, modelId);
+          onNotice("Chat generation stopped.");
         }
-        onNotice(stopped ? "Chat generation stopped." : `Chat completed with ${modelId}.`);
         return;
       }
 
@@ -947,14 +954,23 @@ function Chat({
       });
       if (!res.ok) throw new Error((await res.text()) || "Chat request failed.");
       const data = await res.json();
-      const content = data.choices?.[0]?.message?.content ?? data.error ?? "No response";
+      if (data.error) {
+        throw new Error(typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error));
+      }
+      const content = data.choices?.[0]?.message?.content ?? "No response";
       const assistantMessage = await appendConversationMessage(conversation.id, "assistant", content);
       updateConversationMessages(conversation.id, [...nextMessages, assistantMessage], modelId);
       onNotice(`Chat completed with ${modelId}.`);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") onNotice("Chat generation stopped.");
       else {
-        onNotice("Chat request failed. Start the deepLocal API and load a model.");
+        const messageText = error instanceof Error ? error.message : "Chat request failed. Start the deepLocal API and load a model.";
+        const errorMessage = assistantLocalMessage(`I could not generate a reply. ${messageText}`);
+        const activeConv = activeConversation;
+        if (activeConv) {
+          updateConversationMessages(activeConv.id, [...activeConv.messages, errorMessage], activeConv.model_id ?? conversationModel);
+        }
+        onNotice(messageText);
         refreshConversations();
       }
     } finally {
@@ -3094,33 +3110,66 @@ type ChatGenerationOptions = {
 };
 
 function estimateMessageTokens(message: OpenAiRequestMessage) {
-  return Math.ceil(message.content.length / 2.5) + 8;
+  let cjkCount = 0;
+  for (let i = 0; i < message.content.length; i += 1) {
+    const code = message.content.charCodeAt(i);
+    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf)) {
+      cjkCount += 1;
+    }
+  }
+  const otherCount = message.content.length - cjkCount;
+  // CJK characters average ~1.2 tokens in subword tokenizers.
+  // ASCII / English averages ~0.35 tokens per character (around 4 chars/token).
+  // +12 tokens overhead for chat template message framing.
+  return Math.ceil(cjkCount * 1.2 + otherCount * 0.35) + 12;
 }
 
 function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoadOptions): OpenAiRequestMessage[] {
   const systemMessage: OpenAiRequestMessage = { role: "system", content: CHAT_SYSTEM_PROMPT };
-  const contextBudget = Math.max(512, Math.floor(options.context_length * 0.5));
-  const selected: OpenAiRequestMessage[] = [];
-  let usedTokens = estimateMessageTokens(systemMessage);
+  const systemTokens = estimateMessageTokens(systemMessage);
+  // Reserve response output space: at least 256 tokens, up to CHAT_RESPONSE_MAX_TOKENS, but capped at 30% of context
+  const reservedOutput = Math.min(
+    CHAT_RESPONSE_MAX_TOKENS,
+    Math.max(256, Math.floor(options.context_length * 0.25)),
+  );
+  // Context budget for conversation messages: context minus reserved output minus safety margin (128 tokens)
+  const contextBudget = Math.max(256, options.context_length - reservedOutput - 128);
 
+  const selected: OpenAiRequestMessage[] = [];
+  let usedTokens = systemTokens;
+
+  // Walk backwards from latest to oldest messages to preserve as many conversation turns as possible
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const candidate: OpenAiRequestMessage = { role: messages[index].role, content: messages[index].content };
+    const msg = messages[index];
+    if (!msg.content.trim()) continue;
+    const candidate: OpenAiRequestMessage = { role: msg.role, content: msg.content };
     const candidateTokens = estimateMessageTokens(candidate);
     if (selected.length > 0 && usedTokens + candidateTokens > contextBudget) break;
     selected.unshift(candidate);
     usedTokens += candidateTokens;
   }
 
-  return [systemMessage, ...selected];
+  // Merge consecutive same-role messages so orphaned user turns don't break model chat templates
+  const merged: OpenAiRequestMessage[] = [];
+  for (const msg of selected) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === msg.role) {
+      last.content += `\n\n${msg.content}`;
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+
+  return [systemMessage, ...merged];
 }
 
 function chatGenerationOptions(messages: OpenAiRequestMessage[], options: ModelLoadOptions): ChatGenerationOptions {
   const estimatedInputTokens = messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
-  const availableOutputTokens = options.context_length - estimatedInputTokens - 128;
+  const availableOutputTokens = Math.max(64, options.context_length - estimatedInputTokens - 64);
   return {
     temperature: CHAT_TEMPERATURE,
     top_p: CHAT_TOP_P,
-    max_tokens: Math.max(512, Math.min(CHAT_RESPONSE_MAX_TOKENS, availableOutputTokens)),
+    max_tokens: Math.min(CHAT_RESPONSE_MAX_TOKENS, availableOutputTokens),
     repeat_penalty: CHAT_REPEAT_PENALTY,
     repeat_last_n: CHAT_REPEAT_LAST_N,
     min_p: CHAT_MIN_P,
@@ -3181,6 +3230,11 @@ async function streamChatCompletion(
 
       if (!data || data === "[DONE]") continue;
       const parsed = JSON.parse(data);
+      if (parsed.error) {
+        throw new Error(
+          typeof parsed.error === "string" ? parsed.error : parsed.error.message || JSON.stringify(parsed.error),
+        );
+      }
       const token = parsed.choices?.[0]?.delta?.content;
       if (typeof token === "string") onToken(token);
     }
@@ -3195,6 +3249,11 @@ async function streamChatCompletion(
 
     if (data && data !== "[DONE]") {
       const parsed = JSON.parse(data);
+      if (parsed.error) {
+        throw new Error(
+          typeof parsed.error === "string" ? parsed.error : parsed.error.message || JSON.stringify(parsed.error),
+        );
+      }
       const token = parsed.choices?.[0]?.delta?.content;
       if (typeof token === "string") onToken(token);
     }
