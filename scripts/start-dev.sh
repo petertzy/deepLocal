@@ -231,6 +231,9 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 
-echo "Starting deepLocal desktop UI..."
+echo "Building deepLocal desktop UI..."
+npm run build
+
+echo "Starting deepLocal desktop UI dev server..."
 echo "Open: http://127.0.0.1:$FRONTEND_PORT/"
 npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT"
