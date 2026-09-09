@@ -21,7 +21,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     env,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     sync::Arc,
     time::{Duration, Instant},
@@ -38,6 +38,7 @@ pub struct ApiState {
     pub runtime: RuntimeManager,
     pub downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     pub storage: Arc<Mutex<Storage>>,
+    pub models_directory: PathBuf,
     pub search_filters: Arc<RwLock<SearchFiltersConfig>>,
     pub huggingface_size_cache: Arc<RwLock<HashMap<String, HashMap<String, u64>>>>,
 }
@@ -54,6 +55,20 @@ pub fn router_with_options(
     runtime: RuntimeManager,
     enable_cors: bool,
     initial_search_filters: SearchFiltersConfig,
+) -> Router {
+    router_with_models_directory(
+        runtime,
+        enable_cors,
+        initial_search_filters,
+        absolute_path(PathBuf::from("./models")),
+    )
+}
+
+pub fn router_with_models_directory(
+    runtime: RuntimeManager,
+    enable_cors: bool,
+    initial_search_filters: SearchFiltersConfig,
+    models_root: PathBuf,
 ) -> Router {
     let storage = open_default_storage();
     let restored_downloads = restore_download_jobs(&storage);
@@ -118,6 +133,7 @@ pub fn router_with_options(
             runtime,
             downloads: Arc::new(RwLock::new(restored_downloads)),
             storage: Arc::new(Mutex::new(storage)),
+            models_directory: models_root,
             search_filters: Arc::new(RwLock::new(initial_search_filters)),
             huggingface_size_cache: Arc::new(RwLock::new(HashMap::new())),
         }));
@@ -212,7 +228,7 @@ async fn rescan_models(State(state): State<Arc<ApiState>>) -> impl IntoResponse 
         .iter()
         .map(|model| model.id.clone())
         .collect();
-    let root = models_root();
+    let root = state.models_directory.clone();
     let mut discovered = Vec::new();
 
     let entries = match std::fs::read_dir(&root) {
@@ -335,7 +351,7 @@ async fn delete_model(
 
     if body.delete_file {
         match model.local_path.as_deref() {
-            Some(path) if is_inside_models_root(path) => {}
+            Some(path) if is_inside_models_root(path, &state.models_directory) => {}
             Some(_) => {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
@@ -372,7 +388,8 @@ async fn delete_model(
                         .into_response();
                 }
             }
-            deleted_directory = remove_empty_models_subdirectory(path).unwrap_or(false);
+            deleted_directory =
+                remove_empty_models_subdirectory(path, &state.models_directory).unwrap_or(false);
         }
     }
 
@@ -837,7 +854,8 @@ async fn huggingface_auth_check(
 #[cfg(test)]
 mod tests {
     use super::{
-        HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, apply_huggingface_sizes,
+        absolute_path, HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest,
+        apply_huggingface_sizes,
         calculate_eta_seconds, find_model_by_local_path, huggingface_access_message,
         is_download_history, is_gguf_header, is_inside_models_root, model_id_from_filename,
         openai_model_data, range_header, register_model_descriptor,
@@ -895,20 +913,20 @@ mod tests {
 
     #[test]
     fn model_delete_paths_must_stay_inside_models_root() {
-        assert!(is_inside_models_root("./models/example/model.gguf"));
-        assert!(!is_inside_models_root("../outside/model.gguf"));
+        assert!(is_inside_models_root("./models/example/model.gguf", &absolute_path(PathBuf::from("./models"))));
+        assert!(!is_inside_models_root("../outside/model.gguf", &absolute_path(PathBuf::from("./models"))));
     }
 
     #[test]
     fn model_delete_removes_empty_model_subdirectory() {
-        let root = super::models_root();
+        let root = absolute_path(PathBuf::from("./models"));
         let directory = root.join(format!("delete-empty-test-{}", uuid::Uuid::new_v4()));
         let file = directory.join("model.gguf");
         std::fs::create_dir_all(&directory).expect("create test directory");
         std::fs::write(&file, b"GGUF").expect("write test file");
         std::fs::remove_file(&file).expect("remove test file");
 
-        let removed = remove_empty_models_subdirectory(&file.to_string_lossy())
+        let removed = remove_empty_models_subdirectory(&file.to_string_lossy(), &root)
             .expect("remove empty model directory");
 
         assert!(removed);
@@ -941,7 +959,7 @@ mod tests {
             ))
             .await;
 
-        let path = super::models_root().join("gemma/model.gguf");
+        let path = absolute_path(PathBuf::from("./models")).join("gemma/model.gguf");
         let found = find_model_by_local_path(&runtime, &path.to_string_lossy()).await;
 
         assert_eq!(found.expect("registered path").id, "gemma");
@@ -1246,9 +1264,9 @@ async fn discard_download(
         let partial_path = partial_download_path(&PathBuf::from(local_path));
         let _ = tokio::fs::remove_file(partial_path).await;
         if let Some(parent) = PathBuf::from(local_path).parent().map(PathBuf::from) {
-            let models_root = models_root();
+            let models_root = &state.models_directory;
             let parent = absolute_path(parent);
-            if parent != models_root && parent.starts_with(models_root) {
+            if parent != models_root.as_path() && parent.starts_with(models_root) {
                 let _ = tokio::fs::remove_dir(parent).await;
             }
         }
@@ -1260,13 +1278,13 @@ async fn discard_download(
     Json(serde_json::json!({ "discarded": true, "id": job.id })).into_response()
 }
 
-async fn models_directory() -> Json<serde_json::Value> {
-    let path = models_root();
+async fn models_directory(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
+    let path = &state.models_directory;
     Json(serde_json::json!({ "path": path.to_string_lossy() }))
 }
 
-async fn open_models_directory() -> impl IntoResponse {
-    let path = models_root();
+async fn open_models_directory(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
+    let path = &state.models_directory;
     if let Err(error) = std::fs::create_dir_all(&path) {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1306,12 +1324,17 @@ pub struct RevealModelPathRequest {
     pub path: String,
 }
 
-async fn reveal_model_path(Json(body): Json<RevealModelPathRequest>) -> impl IntoResponse {
+async fn reveal_model_path(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<RevealModelPathRequest>,
+) -> impl IntoResponse {
     let path = absolute_path(PathBuf::from(body.path));
     let target = if path.exists() {
         path
     } else {
-        path.parent().map(PathBuf::from).unwrap_or_else(models_root)
+        path.parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.models_directory.clone())
     };
 
     let result = if cfg!(target_os = "macos") && target.is_file() {
@@ -1354,7 +1377,7 @@ async fn huggingface_download(
 ) -> impl IntoResponse {
     let job_id = Uuid::new_v4().to_string();
     let safe_repo = body.repo.replace('/', "__");
-    let local_dir = models_root().join(safe_repo);
+    let local_dir = state.models_directory.join(safe_repo);
     let local_path = local_dir.join(&body.filename);
     let token = request_huggingface_token(body.token.clone(), body.use_env_token);
     let now = Utc::now();
@@ -1410,9 +1433,6 @@ async fn huggingface_download(
     (axum::http::StatusCode::ACCEPTED, Json(job)).into_response()
 }
 
-fn models_root() -> PathBuf {
-    absolute_path(PathBuf::from("./models"))
-}
 
 fn is_gguf_path(path: &std::path::Path) -> bool {
     path.extension()
@@ -1457,14 +1477,15 @@ fn unique_model_id(base_id: &str, used_ids: &mut std::collections::HashSet<Strin
     unreachable!("unbounded model id suffix search should always find a free id")
 }
 
-fn is_inside_models_root(path: &str) -> bool {
-    let models_root = models_root();
+fn is_inside_models_root(path: &str, models_root: &Path) -> bool {
     let path = absolute_path(PathBuf::from(path));
     path.starts_with(models_root)
 }
 
-fn remove_empty_models_subdirectory(path: &str) -> std::io::Result<bool> {
-    let models_root = models_root();
+fn remove_empty_models_subdirectory(
+    path: &str,
+    models_root: &Path,
+) -> std::io::Result<bool> {
     let path = absolute_path(PathBuf::from(path));
     let Some(parent) = path.parent() else {
         return Ok(false);

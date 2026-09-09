@@ -12,33 +12,54 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|error| anyhow::anyhow!(error))?;
-            fs::create_dir_all(data_dir.join("models"))?;
-            std::env::set_current_dir(&data_dir)?;
+            let models_directory = desktop_models_directory(app)?;
+            fs::create_dir_all(&models_directory)?;
+
             let resource_dir = app
                 .path()
                 .resource_dir()
                 .map_err(|error| anyhow::anyhow!(error))?;
             configure_llama_server(&resource_dir);
-            tauri::async_runtime::spawn(start_api(data_dir));
+
+            tauri::async_runtime::spawn(start_api(models_directory));
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("failed to run deepLocal desktop app");
 }
 
-async fn start_api(data_dir: PathBuf) {
-    if let Err(error) = start_api_inner(data_dir).await {
+fn desktop_models_directory(_app: &tauri::App) -> anyhow::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("could not determine the current user's home directory"))?;
+        Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("deepLocal")
+            .join("models"))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(_app
+            .path()
+            .app_data_dir()
+            .map_err(|error| anyhow::anyhow!(error))?
+            .join("models"))
+    }
+}
+
+async fn start_api(models_directory: PathBuf) {
+    if let Err(error) = start_api_inner(models_directory).await {
         eprintln!("deepLocal API failed: {error:#}");
     }
 }
 
-async fn start_api_inner(data_dir: PathBuf) -> anyhow::Result<()> {
+async fn start_api_inner(models_directory: PathBuf) -> anyhow::Result<()> {
     let mut config = DeepLocalConfig::default();
-    config.models.directory = data_dir.join("models");
+    config.models.directory = models_directory.clone();
     config.server.host = API_HOST.to_string();
     config.server.port = API_PORT;
     config.server.enable_cors = true;
@@ -50,7 +71,12 @@ async fn start_api_inner(data_dir: PathBuf) -> anyhow::Result<()> {
         .await;
     register_local_gguf_models(&runtime, &config.models.directory).await?;
 
-    let app = deeplocal_api::router_with_options(runtime, true, config.search_filters);
+    let app = deeplocal_api::router_with_models_directory(
+        runtime,
+        true,
+        config.search_filters,
+        config.models.directory.clone(),
+    );
     let addr: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
