@@ -179,7 +179,7 @@ test("generates an editable chat question with the selected local model", async 
   await expect(page.getByRole("textbox", { name: "Chat prompt" })).toBeFocused();
   expect(suggestionBody?.model).toBe(modelId);
   expect(suggestionBody?.stream).toBe(false);
-  expect(suggestionBody?.max_tokens).toBe(96);
+  expect(suggestionBody?.max_tokens).toBe(64);
   expect(suggestionBody?.messages).toEqual([
     { role: "system", content: expect.stringMatching(/suggest one useful.*Chinese/) },
     { role: "user", content: expect.stringContaining("Current input draft") },

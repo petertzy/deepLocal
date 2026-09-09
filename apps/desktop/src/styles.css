@@ -1098,6 +1098,7 @@ progress {
 }
 
 .chat {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 10px;
@@ -1176,6 +1177,24 @@ progress {
   min-height: 0;
   overflow: auto;
   padding: 10px 4px 6px;
+}
+
+.scrollToBottom {
+  position: absolute;
+  right: 28px;
+  bottom: 82px;
+  z-index: 2;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #b9d9d0;
+  color: #245f53;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(23, 32, 38, 0.14);
+  font-size: 12px;
+}
+
+.scrollToBottom:hover {
+  background: #e7f5f0;
 }
 
 .message {

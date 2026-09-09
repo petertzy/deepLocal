@@ -13,6 +13,7 @@ import {
   ArrowRight,
   Boxes,
   Check,
+  ChevronDown,
   Copy,
   Cpu,
   Download,
@@ -191,6 +192,7 @@ const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
 const CHAT_RESPONSE_MAX_TOKENS = 4096;
+const SUGGESTION_TIMEOUT_MS = 30_000;
 const CHAT_TEMPERATURE = 0.35;
 const CHAT_TOP_P = 0.9;
 const CHAT_SYSTEM_PROMPT =
@@ -757,7 +759,9 @@ function Chat({
   const [deletingConversation, setDeletingConversation] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptNearBottomRef = useRef(true);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const activeModel = loaded.find((model) => model.backend !== "mock")?.id ?? loaded[0]?.id;
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0];
   const registeredModelIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
@@ -815,8 +819,27 @@ function Chat({
 
   useEffect(() => {
     const transcript = transcriptRef.current;
-    if (transcript) transcript.scrollTop = transcript.scrollHeight;
-  }, [activeConversationId, messages.length, messages.at(-1)?.content]);
+    if (!transcript) return;
+    if (transcriptNearBottomRef.current) transcript.scrollTop = transcript.scrollHeight;
+    const distanceFromBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    setShowScrollToBottom(isGenerating && distanceFromBottom > 80);
+  }, [activeConversationId, isGenerating, messages.length, messages.at(-1)?.content]);
+
+  function handleTranscriptScroll(event: React.UIEvent<HTMLDivElement>) {
+    const transcript = event.currentTarget;
+    const distanceFromBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    const nearBottom = distanceFromBottom <= 80;
+    transcriptNearBottomRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom && isGenerating);
+  }
+
+  function scrollTranscriptToBottom() {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    transcriptNearBottomRef.current = true;
+    setShowScrollToBottom(false);
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+  }
 
   useEffect(() => {
     const nextModelId = activeConversation?.model_id ?? selectedModelId;
@@ -855,7 +878,9 @@ function Chat({
       const userMessage = await appendConversationMessage(conversation.id, "user", prompt);
       const nextMessages: ChatMessage[] = [...conversation.messages, userMessage];
       const modelId = conversation.model_id ?? conversationModel;
-      const requestMessages = buildChatCompletionMessages(nextMessages, loadOptionsForModel(modelId));
+      const loadOptions = loadOptionsForModel(modelId);
+      const requestMessages = buildChatCompletionMessages(nextMessages, loadOptions);
+      const generationOptions = chatGenerationOptions(requestMessages, loadOptions);
       updateConversationMessages(conversation.id, nextMessages, modelId);
 
       if (streaming) {
@@ -877,6 +902,7 @@ function Chat({
             modelId,
             requestMessages,
             controller.signal,
+            generationOptions,
             (token) => {
               content += token;
               updateConversationMessages(conversation.id, [...nextMessages, { ...assistantDraft, content }], modelId);
@@ -912,9 +938,7 @@ function Chat({
         body: JSON.stringify({
           model: modelId,
           stream: false,
-          temperature: CHAT_TEMPERATURE,
-          top_p: CHAT_TOP_P,
-          max_tokens: CHAT_RESPONSE_MAX_TOKENS,
+          ...generationOptions,
           messages: requestMessages,
         }),
       });
@@ -959,15 +983,18 @@ function Chat({
     }
 
     setIsSuggesting(true);
+    const suggestionController = new AbortController();
+    const suggestionTimeout = window.setTimeout(() => suggestionController.abort(), SUGGESTION_TIMEOUT_MS);
     try {
       await ensureModelLoaded(conversationModel);
-      const prompt = await generatePromptSuggestion(conversationModel, messages, input, suggestionLanguage);
+      const prompt = await generatePromptSuggestion(conversationModel, messages, input, suggestionLanguage, suggestionController.signal);
       setInput(prompt);
       onNotice("AI suggested a question.");
       window.setTimeout(() => promptInputRef.current?.focus(), 0);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : "Failed to suggest a question.");
+      onNotice(error instanceof DOMException && error.name === "AbortError" ? "Suggest timed out. Try again or use a shorter context." : error instanceof Error ? error.message : "Failed to suggest a question.");
     } finally {
+      window.clearTimeout(suggestionTimeout);
       setIsSuggesting(false);
     }
   }
@@ -1147,7 +1174,7 @@ function Chat({
             </button>
           </div>
         </div>
-        <div className="transcript" ref={transcriptRef}>
+        <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
           {loadingModelId ? (
             <EmptyState
               icon={<Boxes size={24} />}
@@ -1232,6 +1259,12 @@ function Chat({
             ))
           )}
         </div>
+        {showScrollToBottom && (
+          <button className="scrollToBottom" type="button" onClick={scrollTranscriptToBottom}>
+            <ChevronDown size={16} />
+            New content below
+          </button>
+        )}
         <div className="composer">
           <label className="streamToggle">
             <input type="checkbox" checked={streaming} disabled={isGenerating} onChange={(event) => setStreaming(event.target.checked)} />
@@ -3048,11 +3081,41 @@ function formatConversationTime(value: string) {
   return formatter.format(timestamp);
 }
 
-function buildChatCompletionMessages(messages: ChatMessage[], _options: ModelLoadOptions): OpenAiRequestMessage[] {
-  return [
-    { role: "system", content: CHAT_SYSTEM_PROMPT },
-    ...messages.map(({ role, content }) => ({ role, content })),
-  ];
+type ChatGenerationOptions = {
+  temperature: number;
+  top_p: number;
+  max_tokens: number;
+};
+
+function estimateMessageTokens(message: OpenAiRequestMessage) {
+  return Math.ceil(message.content.length / 2.5) + 8;
+}
+
+function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoadOptions): OpenAiRequestMessage[] {
+  const systemMessage: OpenAiRequestMessage = { role: "system", content: CHAT_SYSTEM_PROMPT };
+  const contextBudget = Math.max(512, Math.floor(options.context_length * 0.5));
+  const selected: OpenAiRequestMessage[] = [];
+  let usedTokens = estimateMessageTokens(systemMessage);
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate: OpenAiRequestMessage = { role: messages[index].role, content: messages[index].content };
+    const candidateTokens = estimateMessageTokens(candidate);
+    if (selected.length > 0 && usedTokens + candidateTokens > contextBudget) break;
+    selected.unshift(candidate);
+    usedTokens += candidateTokens;
+  }
+
+  return [systemMessage, ...selected];
+}
+
+function chatGenerationOptions(messages: OpenAiRequestMessage[], options: ModelLoadOptions): ChatGenerationOptions {
+  const estimatedInputTokens = messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+  const availableOutputTokens = options.context_length - estimatedInputTokens - 128;
+  return {
+    temperature: CHAT_TEMPERATURE,
+    top_p: CHAT_TOP_P,
+    max_tokens: Math.max(512, Math.min(CHAT_RESPONSE_MAX_TOKENS, availableOutputTokens)),
+  };
 }
 
 function assistantLocalMessage(content: string): ChatMessage {
@@ -3068,6 +3131,7 @@ async function streamChatCompletion(
   model: string,
   messages: OpenAiRequestMessage[],
   signal: AbortSignal,
+  generationOptions: ChatGenerationOptions,
   onToken: (token: string) => void,
 ) {
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -3077,9 +3141,7 @@ async function streamChatCompletion(
     body: JSON.stringify({
       model,
       stream: true,
-      temperature: CHAT_TEMPERATURE,
-      top_p: CHAT_TOP_P,
-      max_tokens: CHAT_RESPONSE_MAX_TOKENS,
+      ...generationOptions,
       messages,
     }),
   });
@@ -3130,17 +3192,18 @@ async function streamChatCompletion(
   }
 }
 
-async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string) {
+async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string, signal: AbortSignal) {
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal,
     body: JSON.stringify({
       model,
       stream: false,
       temperature: 0.9,
       top_p: 0.95,
-      max_tokens: 96,
-      stop: ["\n\n"],
+      max_tokens: 64,
+      stop: ["\n"],
       messages: buildPromptSuggestionMessages(messages, currentDraft, language),
     }),
   });
