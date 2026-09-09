@@ -192,6 +192,10 @@ const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
 const CHAT_RESPONSE_MAX_TOKENS = 4096;
+// Maximum number of prior conversation *pairs* (user+assistant) to include in
+// context. Gemma 1B degrades rapidly with longer English responses in context —
+// keeping only 1 prior turn gives a clean state while retaining basic continuity.
+const CHAT_MAX_HISTORY_TURNS = 1;
 const SUGGESTION_TIMEOUT_MS = 30_000;
 const CHAT_TEMPERATURE = 0.35;
 const CHAT_TOP_P = 0.9;
@@ -3118,10 +3122,11 @@ function estimateMessageTokens(message: OpenAiRequestMessage) {
     }
   }
   const otherCount = message.content.length - cjkCount;
-  // CJK characters average ~1.2 tokens in subword tokenizers.
-  // ASCII / English averages ~0.35 tokens per character (around 4 chars/token).
-  // +12 tokens overhead for chat template message framing.
-  return Math.ceil(cjkCount * 1.2 + otherCount * 0.35) + 12;
+  // CJK characters average ~1.5 tokens in subword tokenizers (conservative estimate).
+  // ASCII / English averages ~0.5 tokens per character; markdown symbols, URLs,
+  // and code identifiers tokenize poorly so we use a higher multiplier than naive ~0.25.
+  // +24 tokens overhead for chat template message framing (BOS, role tags, separators).
+  return Math.ceil(cjkCount * 1.5 + otherCount * 0.5) + 24;
 }
 
 function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoadOptions): OpenAiRequestMessage[] {
@@ -3137,16 +3142,22 @@ function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoad
 
   const selected: OpenAiRequestMessage[] = [];
   let usedTokens = systemTokens;
+  // Count user turns included so far — each user+assistant pair = 1 turn.
+  let userTurnsIncluded = 0;
 
-  // Walk backwards from latest to oldest messages to preserve as many conversation turns as possible
+  // Walk backwards from latest to oldest messages to preserve the most recent turns.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const msg = messages[index];
     if (!msg.content.trim()) continue;
+    // Hard cap: don't include more prior history than CHAT_MAX_HISTORY_TURNS pairs.
+    // This keeps small models from degrading over long conversations.
+    if (msg.role === "user" && userTurnsIncluded >= CHAT_MAX_HISTORY_TURNS) break;
     const candidate: OpenAiRequestMessage = { role: msg.role, content: msg.content };
     const candidateTokens = estimateMessageTokens(candidate);
     if (selected.length > 0 && usedTokens + candidateTokens > contextBudget) break;
     selected.unshift(candidate);
     usedTokens += candidateTokens;
+    if (msg.role === "user") userTurnsIncluded += 1;
   }
 
   // Merge consecutive same-role messages so orphaned user turns don't break model chat templates
@@ -3158,6 +3169,12 @@ function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoad
     } else {
       merged.push({ ...msg });
     }
+  }
+
+  // Ensure the conversation never starts with an assistant turn — some chat
+  // templates require the first non-system message to be from the user.
+  while (merged.length > 0 && merged[0].role === "assistant") {
+    merged.shift();
   }
 
   return [systemMessage, ...merged];

@@ -418,6 +418,33 @@ fn parse_llama_sse_event(event: &str, index: &mut usize) -> anyhow::Result<Optio
     }
 
     let payload: serde_json::Value = serde_json::from_str(&data)?;
+    if let Some(err) = payload.get("error") {
+        let msg = err["message"]
+            .as_str()
+            .or_else(|| err.as_str())
+            .unwrap_or("Inference backend error");
+        anyhow::bail!("{msg}");
+    }
+
+    if let Some(choice) = payload["choices"].as_array().and_then(|arr| arr.first()) {
+        if let Some(finish_reason) = choice["finish_reason"].as_str() {
+            if finish_reason == "length" {
+                if *index == 0 {
+                    // No tokens generated at all — full context overflow, surface as error.
+                    anyhow::bail!("Context length exceeded. The model could not generate a response within the context window.");
+                } else {
+                    // Some tokens generated but output was cut short — emit a truncation marker
+                    // so the frontend can show a visible notice instead of an abrupt cut-off.
+                    return Ok(Some(GeneratedToken {
+                        text: "\n\n⚠️ [Response truncated: output token limit reached]".to_string(),
+                        index: *index,
+                        done: true,
+                    }));
+                }
+            }
+        }
+    }
+
     let Some(text) = payload["choices"][0]["delta"]["content"].as_str() else {
         return Ok(None);
     };
@@ -486,6 +513,8 @@ impl InferenceBackend for LlamaCppBackend {
             .arg("127.0.0.1")
             .arg("--port")
             .arg(port.to_string())
+            .arg("--parallel")
+            .arg("1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(context) = options.context_length {
@@ -599,10 +628,14 @@ impl InferenceBackend for LlamaCppBackend {
                 "temperature": request.parameters.temperature,
                 "top_p": request.parameters.top_p,
                 "max_tokens": request.parameters.max_tokens,
-                "stop": request.parameters.stop
-                ,"repeat_penalty": request.parameters.repeat_penalty,
+                "stop": request.parameters.stop,
+                "repeat_penalty": request.parameters.repeat_penalty,
                 "repeat_last_n": request.parameters.repeat_last_n,
-                "min_p": request.parameters.min_p
+                "min_p": request.parameters.min_p,
+                // Disable prompt caching so each request starts from a clean KV-cache
+                // state. Without this, llama-server accumulates context across requests
+                // which can cause stale state and silent hangs after many turns.
+                "cache_prompt": false
             }))
             .send()
             .await?
