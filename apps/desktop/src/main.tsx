@@ -41,6 +41,14 @@ import "./styles.css";
 
 type Tab = "dashboard" | "chat" | "models" | "server" | "settings";
 type Health = "online" | "offline";
+type UpdateStatus =
+  | { kind: "idle"; message: string }
+  | { kind: "checking"; message: string }
+  | { kind: "latest"; message: string }
+  | { kind: "available"; message: string; version: string }
+  | { kind: "installing"; message: string; version: string }
+  | { kind: "installed"; message: string; version: string }
+  | { kind: "error"; message: string };
 type SearchSort = "downloads" | "likes" | "smallest-file" | "largest-file" | "name";
 
 type HardwareProfile = {
@@ -476,6 +484,7 @@ function App() {
   const [suggestionLanguage, setSuggestionLanguage] = useState(() => readStringStorage(CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY, "English"));
   const [notices, setNotices] = useState<Partial<Record<Tab, string>>>({});
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: "idle", message: "No update check has been performed." });
   const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
   const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
   const notice = notices[tab];
@@ -486,23 +495,30 @@ function App() {
 
   async function checkForUpdates() {
     if (!("__TAURI_INTERNALS__" in window)) {
-      updateNotice("settings", "Updates are available only in the packaged app.");
+      setUpdateStatus({ kind: "error", message: "Updates are only available in the packaged app. Run this check from an installed deepLocal app." });
       return;
     }
     setUpdateBusy(true);
+    setUpdateStatus({ kind: "checking", message: "Checking GitHub for a newer deepLocal release…" });
     try {
       const update = await check();
       if (!update) {
-        updateNotice("settings", "deepLocal is up to date.");
+        setUpdateStatus({ kind: "latest", message: "You are using the latest available version of deepLocal." });
         return;
       }
-      updateNotice("settings", `Version ${update.version} is available.`);
+      setUpdateStatus({ kind: "available", version: update.version, message: `Version ${update.version} is available to download.` });
       if (window.confirm(`deepLocal ${update.version} is available. Download and install it now?`)) {
+        setUpdateStatus({ kind: "installing", version: update.version, message: `Downloading and installing deepLocal ${update.version}… Keep the app open until this finishes.` });
         await update.downloadAndInstall();
-        updateNotice("settings", "Update installed. Restart deepLocal to use the new version.");
+        setUpdateStatus({ kind: "installed", version: update.version, message: `Version ${update.version} was installed. Restart deepLocal to finish updating.` });
+      } else {
+        setUpdateStatus({ kind: "available", version: update.version, message: `Version ${update.version} is ready whenever you are.` });
       }
-    } catch (error) {
-      updateNotice("settings", `Update check failed: ${String(error)}`);
+    } catch {
+      setUpdateStatus({
+        kind: "error",
+        message: "We could not check for updates. Check your internet connection and try again. If this continues, the latest release may not have valid signed updater files.",
+      });
     } finally {
       setUpdateBusy(false);
     }
@@ -657,6 +673,28 @@ function App() {
             )}
           </div>
         </header>
+
+        {tab === "settings" && (
+          <section className={`updateStatusCard ${updateStatus.kind}`} aria-live="polite">
+            <div>
+              <strong>
+                {updateStatus.kind === "checking" && "Checking for updates"}
+                {updateStatus.kind === "latest" && "You are up to date"}
+                {updateStatus.kind === "available" && "Update available"}
+                {updateStatus.kind === "installing" && "Installing update"}
+                {updateStatus.kind === "installed" && "Update ready"}
+                {updateStatus.kind === "error" && "Update check needs attention"}
+                {updateStatus.kind === "idle" && "App updates"}
+              </strong>
+              <p>{updateStatus.message}</p>
+            </div>
+            {(updateStatus.kind === "error" || updateStatus.kind === "latest") && (
+              <button className="secondaryAction" onClick={checkForUpdates} disabled={updateBusy}>
+                {updateBusy ? "Checking..." : "Try again"}
+              </button>
+            )}
+          </section>
+        )}
 
         {tab === "dashboard" && <Dashboard hardware={hardware} health={health} loaded={loaded} models={models} onOpenModels={() => selectTab("models")} />}
         <RetainedPage active={tab === "chat"}>

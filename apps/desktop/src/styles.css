@@ -163,6 +163,55 @@ header {
   background: #fff3ef;
 }
 
+.updateStatusCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid #d9e5e1;
+  border-radius: 10px;
+  color: #245f53;
+  background: #eef8f4;
+}
+
+.updateStatusCard strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.updateStatusCard p {
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.updateStatusCard.checking,
+.updateStatusCard.installing {
+  color: #5d5425;
+  border-color: #e8dfb3;
+  background: #fffbed;
+}
+
+.updateStatusCard.available {
+  color: #245f53;
+  border-color: #b9d9cc;
+  background: #e9f7f0;
+}
+
+.updateStatusCard.installed {
+  color: #315b85;
+  border-color: #c1d5ea;
+  background: #eef6ff;
+}
+
+.updateStatusCard.error {
+  color: #8b382a;
+  border-color: #edc8c0;
+  background: #fff3ef;
+}
+
 h1,
 h2,
 p {
