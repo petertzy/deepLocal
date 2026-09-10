@@ -91,8 +91,23 @@ Useful commands:
 ./scripts/start-dev.sh --build
 ./scripts/install-macos.sh
 ./scripts/package-macos-app.sh
+./scripts/upload-new-app.sh
 ./scripts/uninstall-local.sh
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
+```
+
+`upload-new-app.sh` automatically increments the patch version from the latest
+GitHub release or local Git tag. To explicitly choose a version, set
+`DEEPLOCAL_RELEASE_VERSION`, for example:
+
+```bash
+DEEPLOCAL_RELEASE_VERSION=v0.1.3 ./scripts/upload-new-app.sh
+```
+
+To preview the automatically selected version without building or uploading:
+
+```bash
+DEEPLOCAL_UPLOAD_DRY_RUN=1 ./scripts/upload-new-app.sh
 ```
 
 Windows commands:
