@@ -33,6 +33,8 @@
     "longDescription": "deepLocal helps users download, manage, chat with, and serve local GGUF models.",
     "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
     "externalBin": [],
-    "resources": []
+    "resources": {
+      "resources/llama-runtime": "llama-runtime"
+    }
   }
 }

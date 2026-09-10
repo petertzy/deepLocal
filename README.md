@@ -148,6 +148,10 @@ creates `dist/deepLocal-macos.dmg`.
 
 The packaged app is a native Tauri shell around the existing React UI. It starts
 the local Rust API inside the app process instead of opening a browser window.
+Release builds bundle the llama.cpp runtime at
+`deepLocal.app/Contents/Resources/llama-runtime/`, including `llama-server` and
+its macOS `.dylib` dependencies. The packaged app prefers this bundled runtime,
+so a clean Mac does not need Homebrew or a separately installed `llama-server`.
 Packaged builds bind the API to `127.0.0.1` on an operating-system-assigned
 ephemeral port, while development servers continue to use `14567`. The app
 passes the assigned port to the UI at startup, so it does not reserve or reuse a

@@ -142,22 +142,24 @@ fn collect_gguf_files_inner(directory: &PathBuf, files: &mut Vec<PathBuf>) -> an
 }
 
 fn configure_llama_server(resources: &PathBuf) {
-    if std::env::var_os("LLAMA_SERVER").is_some()
-        || std::env::var_os("DEEPLOCAL_LLAMA_SERVER").is_some()
-    {
-        return;
+    let mut candidates = vec![resources.join("llama-runtime").join("llama-server")];
+    if let Some(path) = std::env::var_os("DEEPLOCAL_LLAMA_SERVER") {
+        candidates.push(PathBuf::from(path));
     }
-
-    for candidate in [
-        resources.join("llama-server"),
+    if let Some(path) = std::env::var_os("LLAMA_SERVER") {
+        candidates.push(PathBuf::from(path));
+    }
+    candidates.extend([
         PathBuf::from("/opt/homebrew/bin/llama-server"),
         PathBuf::from("/usr/local/bin/llama-server"),
-    ] {
+    ]);
+
+    for candidate in candidates {
         if candidate.exists() {
             // SAFETY: This runs during single-threaded app setup before any model
             // loading occurs, so no concurrent environment reads depend on it yet.
             unsafe {
-                std::env::set_var("LLAMA_SERVER", candidate);
+                std::env::set_var("LLAMA_SERVER", &candidate);
             }
             break;
         }
