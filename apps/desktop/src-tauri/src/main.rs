@@ -1,15 +1,16 @@
 use deeplocal_core::{DeepLocalConfig, ModelDescriptor};
 use deeplocal_runtime::{LlamaCppBackend, MockBackend, RuntimeManager};
 use std::{fs, path::PathBuf, sync::Arc};
-use tauri::{Manager, State};
+use tauri::{Manager, RunEvent, State, WindowEvent};
 
 const API_HOST: &str = "127.0.0.1";
 
 struct ApiAddress(String);
+struct RuntimeState(RuntimeManager);
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -26,12 +27,28 @@ fn main() {
                 tauri::async_runtime::block_on(tokio::net::TcpListener::bind((API_HOST, 0)))?;
             let port = listener.local_addr()?.port();
             app.manage(ApiAddress(format!("http://{API_HOST}:{port}")));
-            tauri::async_runtime::spawn(start_api(models_directory, listener, port));
+            let runtime = RuntimeManager::default();
+            app.manage(RuntimeState(runtime.clone()));
+            tauri::async_runtime::spawn(start_api(models_directory, listener, port, runtime));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![api_base_url])
-        .run(tauri::generate_context!())
-        .expect("failed to run deepLocal desktop app");
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::CloseRequested { .. }) {
+                // Closing the desktop window must terminate the Tauri process so
+                // RunEvent::Exit can shut down any llama-server children.
+                window.app_handle().exit(0);
+            }
+        })
+        .build(tauri::generate_context!())?;
+
+    app.run(|app, event| {
+        if matches!(event, RunEvent::Exit) {
+            let runtime = app.state::<RuntimeState>().0.clone();
+            tauri::async_runtime::block_on(runtime.shutdown());
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -62,8 +79,13 @@ fn desktop_models_directory(_app: &tauri::App) -> anyhow::Result<PathBuf> {
     }
 }
 
-async fn start_api(models_directory: PathBuf, listener: tokio::net::TcpListener, port: u16) {
-    if let Err(error) = start_api_inner(models_directory, listener, port).await {
+async fn start_api(
+    models_directory: PathBuf,
+    listener: tokio::net::TcpListener,
+    port: u16,
+    runtime: RuntimeManager,
+) {
+    if let Err(error) = start_api_inner(models_directory, listener, port, runtime).await {
         eprintln!("deepLocal API failed: {error:#}");
     }
 }
@@ -72,6 +94,7 @@ async fn start_api_inner(
     models_directory: PathBuf,
     listener: tokio::net::TcpListener,
     port: u16,
+    runtime: RuntimeManager,
 ) -> anyhow::Result<()> {
     let mut config = DeepLocalConfig::default();
     config.models.directory = models_directory.clone();
@@ -79,7 +102,6 @@ async fn start_api_inner(
     config.server.port = port;
     config.server.enable_cors = true;
 
-    let runtime = RuntimeManager::default();
     runtime.register_backend(Arc::new(MockBackend)).await;
     runtime
         .register_backend(Arc::new(LlamaCppBackend::from_env()))

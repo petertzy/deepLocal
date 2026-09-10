@@ -99,6 +99,13 @@ impl RuntimeManager {
         self.loaded.read().await.values().cloned().collect()
     }
 
+    pub async fn shutdown(&self) {
+        let model_ids: Vec<_> = self.loaded.read().await.keys().cloned().collect();
+        for model_id in model_ids {
+            let _ = self.unload_model(&model_id).await;
+        }
+    }
+
     pub async fn list_backend_statuses(&self) -> Vec<BackendStatus> {
         let mut statuses: Vec<_> = self
             .backends
@@ -345,7 +352,7 @@ impl LlamaCppBackend {
     pub fn new_for_tests(binary: impl Into<PathBuf>, ready_attempts: usize) -> Self {
         Self {
             binary: binary.into(),
-            next_port: AtomicU16::new(18080),
+            next_port: AtomicU16::new(available_test_port()),
             ready_attempts,
             ready_interval: Duration::from_millis(1),
             processes: RwLock::new(HashMap::new()),
@@ -377,6 +384,13 @@ impl LlamaCppBackend {
         }
         anyhow::bail!("llama-server did not become ready on port {port}");
     }
+}
+
+fn available_test_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .unwrap_or(18080)
 }
 
 impl Drop for LlamaCppBackend {
@@ -431,7 +445,9 @@ fn parse_llama_sse_event(event: &str, index: &mut usize) -> anyhow::Result<Optio
             if finish_reason == "length" {
                 if *index == 0 {
                     // No tokens generated at all — full context overflow, surface as error.
-                    anyhow::bail!("Context length exceeded. The model could not generate a response within the context window.");
+                    anyhow::bail!(
+                        "Context length exceeded. The model could not generate a response within the context window."
+                    );
                 } else {
                     // Some tokens generated but output was cut short — emit a truncation marker
                     // so the frontend can show a visible notice instead of an abrupt cut-off.
@@ -561,7 +577,13 @@ impl InferenceBackend for LlamaCppBackend {
 
         if let Err(error) = self.wait_until_ready(port).await {
             let _ = child.kill().await;
-            let captured = logs.lock().await.iter().cloned().collect::<Vec<_>>().join("\n");
+            let captured = logs
+                .lock()
+                .await
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             return Err(anyhow::anyhow!(llama_startup_error_message(
                 &error.to_string(),
                 if captured.is_empty() {
@@ -589,16 +611,21 @@ impl InferenceBackend for LlamaCppBackend {
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<GeneratedToken>>> {
         let port = {
             let mut processes = self.processes.write().await;
-            let process = processes
-                .get_mut(&request.model)
-                .ok_or_else(|| anyhow::anyhow!("llama.cpp model is not loaded: {}", request.model))?;
+            let process = processes.get_mut(&request.model).ok_or_else(|| {
+                anyhow::anyhow!("llama.cpp model is not loaded: {}", request.model)
+            })?;
 
             if let Ok(Some(status)) = process.child.try_wait() {
-                let logs = process.logs.lock().await.iter().cloned().collect::<Vec<_>>().join("\n");
+                let logs = process
+                    .logs
+                    .lock()
+                    .await
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 processes.remove(&request.model);
-                anyhow::bail!(
-                    "llama-server exited unexpectedly ({status}). Recent logs:\n{logs}"
-                );
+                anyhow::bail!("llama-server exited unexpectedly ({status}). Recent logs:\n{logs}");
             }
             process.port
         };
@@ -699,6 +726,7 @@ impl InferenceBackend for LlamaCppBackend {
     async fn unload(&self, model_id: &str) -> anyhow::Result<()> {
         if let Some(mut process) = self.processes.write().await.remove(model_id) {
             process.child.kill().await.ok();
+            process.child.wait().await.ok();
         }
         Ok(())
     }

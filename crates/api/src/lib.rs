@@ -864,7 +864,7 @@ mod tests {
     };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
     use deeplocal_runtime::RuntimeManager;
-    use std::collections::{HashMap, HashSet};
+    use std::{collections::{HashMap, HashSet}, path::PathBuf};
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
