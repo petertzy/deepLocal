@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
@@ -170,7 +171,13 @@ type ModelLoadOptions = {
 
 type StoredModelLoadOptions = Record<string, ModelLoadOptions>;
 
-const API_BASE = "http://127.0.0.1:14567";
+const DEVELOPMENT_API_BASE = "http://127.0.0.1:14567";
+let API_BASE = DEVELOPMENT_API_BASE;
+
+async function resolveApiBase(): Promise<string> {
+  if (!("__TAURI_INTERNALS__" in window)) return DEVELOPMENT_API_BASE;
+  return invoke<string>("api_base_url");
+}
 
 function openRepository(event: React.MouseEvent<HTMLAnchorElement>, repo: string) {
   const url = `https://huggingface.co/${repo}`;
@@ -3340,4 +3347,14 @@ function cleanSuggestedPrompt(value: string) {
     .slice(0, 240);
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+async function mountApp() {
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    API_BASE = await resolveApiBase();
+    root.render(<App />);
+  } catch (error) {
+    root.render(<div className="shell">Unable to start the local API: {String(error)}</div>);
+  }
+}
+
+void mountApp();

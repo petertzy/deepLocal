@@ -1,10 +1,11 @@
 use deeplocal_core::{DeepLocalConfig, ModelDescriptor};
 use deeplocal_runtime::{LlamaCppBackend, MockBackend, RuntimeManager};
-use std::{fs, net::SocketAddr, path::PathBuf, sync::Arc};
-use tauri::Manager;
+use std::{fs, path::PathBuf, sync::Arc};
+use tauri::{Manager, State};
 
 const API_HOST: &str = "127.0.0.1";
-const API_PORT: u16 = 14567;
+
+struct ApiAddress(String);
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -21,19 +22,29 @@ fn main() {
                 .map_err(|error| anyhow::anyhow!(error))?;
             configure_llama_server(&resource_dir);
 
-            tauri::async_runtime::spawn(start_api(models_directory));
+            let listener =
+                tauri::async_runtime::block_on(tokio::net::TcpListener::bind((API_HOST, 0)))?;
+            let port = listener.local_addr()?.port();
+            app.manage(ApiAddress(format!("http://{API_HOST}:{port}")));
+            tauri::async_runtime::spawn(start_api(models_directory, listener, port));
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![api_base_url])
         .run(tauri::generate_context!())
         .expect("failed to run deepLocal desktop app");
+}
+
+#[tauri::command]
+fn api_base_url(address: State<'_, ApiAddress>) -> String {
+    address.0.clone()
 }
 
 fn desktop_models_directory(_app: &tauri::App) -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("could not determine the current user's home directory"))?;
+        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+            anyhow::anyhow!("could not determine the current user's home directory")
+        })?;
         Ok(home
             .join("Library")
             .join("Application Support")
@@ -51,17 +62,21 @@ fn desktop_models_directory(_app: &tauri::App) -> anyhow::Result<PathBuf> {
     }
 }
 
-async fn start_api(models_directory: PathBuf) {
-    if let Err(error) = start_api_inner(models_directory).await {
+async fn start_api(models_directory: PathBuf, listener: tokio::net::TcpListener, port: u16) {
+    if let Err(error) = start_api_inner(models_directory, listener, port).await {
         eprintln!("deepLocal API failed: {error:#}");
     }
 }
 
-async fn start_api_inner(models_directory: PathBuf) -> anyhow::Result<()> {
+async fn start_api_inner(
+    models_directory: PathBuf,
+    listener: tokio::net::TcpListener,
+    port: u16,
+) -> anyhow::Result<()> {
     let mut config = DeepLocalConfig::default();
     config.models.directory = models_directory.clone();
     config.server.host = API_HOST.to_string();
-    config.server.port = API_PORT;
+    config.server.port = port;
     config.server.enable_cors = true;
 
     let runtime = RuntimeManager::default();
@@ -77,8 +92,6 @@ async fn start_api_inner(models_directory: PathBuf) -> anyhow::Result<()> {
         config.search_filters,
         config.models.directory.clone(),
     );
-    let addr: SocketAddr = format!("{API_HOST}:{API_PORT}").parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -148,5 +161,22 @@ fn configure_llama_server(resources: &PathBuf) {
             }
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::API_HOST;
+
+    #[tokio::test]
+    async fn packaged_api_uses_an_os_assigned_loopback_port() {
+        let listener = tokio::net::TcpListener::bind((API_HOST, 0))
+            .await
+            .expect("bind an OS-assigned port");
+        let address = listener.local_addr().expect("read assigned address");
+
+        assert_eq!(address.ip().to_string(), API_HOST);
+        assert_ne!(address.port(), 0);
+        assert_ne!(address.port(), 14567);
     }
 }

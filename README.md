@@ -17,7 +17,7 @@ model files to a remote service.
 - Load local GGUF models through `llama.cpp`.
 - Chat with loaded models in the browser UI.
 - Render Markdown responses in chat.
-- Expose an OpenAI-compatible local API at `http://127.0.0.1:14567/v1`.
+- Expose an OpenAI-compatible local API at `http://127.0.0.1:14567/v1` in development.
 - Keep Hugging Face tokens local to your machine.
 
 ## Quick Start
@@ -133,6 +133,10 @@ creates `dist/deepLocal-macos.dmg`.
 
 The packaged app is a native Tauri shell around the existing React UI. It starts
 the local Rust API inside the app process instead of opening a browser window.
+Packaged builds bind the API to `127.0.0.1` on an operating-system-assigned
+ephemeral port, while development servers continue to use `14567`. The app
+passes the assigned port to the UI at startup, so it does not reserve or reuse a
+fixed packaged-app port.
 When `LLAMA_SERVER` or `DEEPLOCAL_LLAMA_SERVER` is set, deepLocal uses that
 binary. On macOS, the app also checks the common Homebrew locations
 `/opt/homebrew/bin/llama-server` and `/usr/local/bin/llama-server`.
@@ -189,11 +193,14 @@ desktop use. deepLocal prints a warning when public binding is enabled.
 
 ## Local API
 
-Base URL:
+Development base URL:
 
 ```text
 http://127.0.0.1:14567/v1
 ```
+
+Packaged app base URL: the app assigns an available `127.0.0.1` port at startup;
+it is intentionally not fixed and is not part of the public API contract.
 
 Endpoints:
 
