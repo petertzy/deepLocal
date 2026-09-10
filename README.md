@@ -7,7 +7,7 @@ It pairs a Rust local runtime with a React desktop-style UI. The goal is simple:
 make local AI easier to run, inspect, and integrate without sending prompts or
 model files to a remote service.
 
-<img width="1436" height="625" alt="Image" src="https://github.com/user-attachments/assets/07ee40fd-71bb-46da-8005-76d4d0c07ce7" />
+<img width="1432" height="745" alt="Image" src="https://github.com/user-attachments/assets/ebaddb08-39c0-4990-81f0-97d47dafa93b" />
 
 ## Features
 
