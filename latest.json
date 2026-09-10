@@ -1,0 +1,11 @@
+{
+  "version": "0.1.7",
+  "notes": "Packaged macOS preview release.",
+  "pub_date": "2026-09-10T15:04:05Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUXhOQ3RGcUtEOHVRUzE5azh3NkV5WWJmTlh1TVcyNlRDbmdPdlFRR082NTVNRlRpTzFYTHEvaXRkVWZGQmplUUtRQ1h1dzBiQjN1RmxVOFRzVHUxcmptK01DSVVLeFFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDUyNjM4CWZpbGU6ZGVlcExvY2FsLmFwcC50YXIuZ3oKeFdyS0tvYkl4OXlQdEk0N3BDMHNNUzdwQnRKOXVmMS9QVW14WlhZU2dsd25iczBIY2o0Q0J0UU9GQkFaTEtHcGxqWk80RVVlSjBIV29oVFpLK1Y4Q0E9PQo=",
+      "url": "https://github.com/petertzy/deepLocal/releases/download/v0.1.7/deepLocal.app.tar.gz"
+    }
+  }
+}

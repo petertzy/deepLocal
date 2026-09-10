@@ -5,7 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="$ROOT_DIR/apps/desktop"
 DIST_DIR="$ROOT_DIR/dist"
 LLAMA_RUNTIME_DIR="$ROOT_DIR/apps/desktop/src-tauri/resources/llama-runtime"
+PACKAGING_CONFIG=""
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+cleanup_packaging_config() {
+  if [[ -n "$PACKAGING_CONFIG" ]]; then
+    rm -f "$PACKAGING_CONFIG"
+  fi
+}
+trap cleanup_packaging_config EXIT
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "macOS app packaging must run on macOS." >&2
@@ -215,12 +223,28 @@ NODE
 prepare_llama_runtime
 
 echo "Building Tauri app..."
+TAURI_BUILD_COMMAND="npm run tauri:build"
+if [[ -n "${DEEPLOCAL_TAURI_CONFIG:-}" ]]; then
+  TAURI_BUILD_COMMAND="npm run tauri:build -- --config $DEEPLOCAL_TAURI_CONFIG"
+elif [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  PACKAGING_CONFIG="$(mktemp "${TMPDIR:-/tmp}/deeplocal-tauri-config.XXXXXX.json")"
+  node - "$DESKTOP_DIR/src-tauri/tauri.conf.json" "$PACKAGING_CONFIG" <<'NODE'
+const fs = require('fs');
+const [sourcePath, targetPath] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
+config.bundle.createUpdaterArtifacts = false;
+if (config.plugins) delete config.plugins.updater;
+fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
+NODE
+  TAURI_BUILD_COMMAND="npm run tauri:build -- --config $PACKAGING_CONFIG"
+  echo "TAURI_SIGNING_PRIVATE_KEY is not set; building an unsigned local app without updater artifacts."
+fi
 (
   cd "$DESKTOP_DIR"
   if [[ ! -d node_modules ]]; then
     npm ci
   fi
-  npm run tauri:build
+  eval "$TAURI_BUILD_COMMAND"
 )
 
 rm -rf "$DIST_DIR"

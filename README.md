@@ -136,6 +136,11 @@ Build a shareable Tauri macOS app from the project root:
 ./scripts/package-macos-app.sh
 ```
 
+For local packaging/testing, this command builds an unsigned app when
+`TAURI_SIGNING_PRIVATE_KEY` is not set. The local build intentionally skips
+updater artifacts. Use `./scripts/upload-new-app.sh` with the signing variables
+configured when creating a release that supports in-app updates.
+
 The script creates:
 
 ```text
@@ -170,6 +175,63 @@ That folder contains the SQLite database, logs, and downloaded models. The app
 still binds only to `127.0.0.1` by default. Release builds are unsigned unless
 you configure Apple Developer signing and notarization, so macOS Gatekeeper may
 warn on first launch.
+
+### Updating the packaged app
+
+Packaged builds include the Tauri updater. From the **Settings** tab, choose
+**Check for updates** to check the latest GitHub Release and download/install a
+new signed app bundle without manually deleting the existing app. The updater
+uses this endpoint:
+
+```text
+https://github.com/petertzy/deepLocal/releases/latest/download/latest.json
+```
+
+Updater artifacts must be signed. Before publishing, generate a Tauri signing
+key once and keep the private key outside the repository:
+
+```bash
+cd apps/desktop
+npm run tauri signer generate -w ~/.tauri/deepLocal.key
+```
+
+The command writes the private key to:
+
+```text
+~/.tauri/deepLocal.key
+```
+
+and writes the matching public key to:
+
+```text
+~/.tauri/deepLocal.key.pub
+```
+
+Do not commit either file. The repository ignores `*.key` and `*.key.pub`.
+
+Configure these environment variables when running the release script:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/deepLocal.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="..." # if the key has a password
+export TAURI_UPDATER_PUBLIC_KEY="$(cat ~/.tauri/deepLocal.key.pub)"
+./scripts/upload-new-app.sh
+```
+
+Alternatively, the release script automatically reads those two default files,
+so after generating the key you can simply run:
+
+```bash
+./scripts/upload-new-app.sh
+```
+
+Custom locations are supported with `TAURI_SIGNING_PRIVATE_KEY_FILE` and
+`TAURI_UPDATER_PUBLIC_KEY_FILE`. The private key can also be supplied directly
+through `TAURI_SIGNING_PRIVATE_KEY` (for example, from a CI secret).
+
+The release script uploads the `.app.tar.gz`, `.sig`, and `latest.json` updater
+artifacts in addition to the ZIP and DMG. Without the signing key and public key,
+the script refuses to publish because an unsigned updater would not be safe.
 
 ## Requirements
 

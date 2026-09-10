@@ -59,6 +59,50 @@ if [[ "${DEEPLOCAL_UPLOAD_DRY_RUN:-}" == "1" ]]; then
   exit 0
 fi
 
+SIGNING_KEY_FILE="${TAURI_SIGNING_PRIVATE_KEY_FILE:-${HOME}/.tauri/deepLocal.key}"
+PUBLIC_KEY_FILE="${TAURI_UPDATER_PUBLIC_KEY_FILE:-${SIGNING_KEY_FILE}.pub}"
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -f "$SIGNING_KEY_FILE" ]]; then
+  export TAURI_SIGNING_PRIVATE_KEY="$(cat "$SIGNING_KEY_FILE")"
+fi
+if [[ -z "${TAURI_UPDATER_PUBLIC_KEY:-}" && -f "$PUBLIC_KEY_FILE" ]]; then
+  export TAURI_UPDATER_PUBLIC_KEY="$(cat "$PUBLIC_KEY_FILE")"
+fi
+
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  echo "TAURI_SIGNING_PRIVATE_KEY is required to create signed updater artifacts." >&2
+  echo "Generate a key with: npm run tauri signer generate -w $SIGNING_KEY_FILE" >&2
+  echo "Or set TAURI_SIGNING_PRIVATE_KEY_FILE to an existing private-key path." >&2
+  exit 1
+fi
+if [[ -z "${TAURI_UPDATER_PUBLIC_KEY:-}" ]]; then
+  echo "TAURI_UPDATER_PUBLIC_KEY is required for updater verification." >&2
+  echo "Expected public key file: $PUBLIC_KEY_FILE" >&2
+  echo "Or set TAURI_UPDATER_PUBLIC_KEY_FILE to an existing .pub path." >&2
+  exit 1
+fi
+
+TAURI_CONFIG="$ROOT_DIR/apps/desktop/src-tauri/tauri.conf.json"
+ORIGINAL_CONFIG="$(mktemp)"
+PACKAGING_CONFIG="$(mktemp "${TMPDIR:-/tmp}/deeplocal-release-config.XXXXXX.json")"
+cleanup_config() {
+  rm -f "$ORIGINAL_CONFIG"
+  rm -f "$PACKAGING_CONFIG"
+}
+trap cleanup_config EXIT
+VERSION_NO_V="${RELEASE_VERSION#v}"
+cp "$TAURI_CONFIG" "$ORIGINAL_CONFIG"
+node - "$TAURI_CONFIG" "$PACKAGING_CONFIG" "$VERSION_NO_V" "$TAURI_UPDATER_PUBLIC_KEY" <<'NODE'
+const fs = require('fs');
+const [sourcePath, targetPath, version, publicKey] = process.argv.slice(2);
+const config = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
+config.version = version;
+config.plugins = config.plugins || {};
+config.plugins.updater = config.plugins.updater || {};
+config.plugins.updater.pubkey = publicKey.trim();
+fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
+NODE
+export DEEPLOCAL_TAURI_CONFIG="$PACKAGING_CONFIG"
+
 ./scripts/package-macos-app.sh
 
 echo ""
@@ -67,9 +111,35 @@ shasum -a 256 dist/deepLocal-macos.zip
 shasum -a 256 dist/deepLocal-macos.dmg
 echo ""
 
+UPDATER_ARCHIVE="$(find target/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
+UPDATER_SIGNATURE="${UPDATER_ARCHIVE}.sig"
+if [[ -z "$UPDATER_ARCHIVE" || ! -f "$UPDATER_SIGNATURE" ]]; then
+  echo "Tauri updater artifacts were not generated." >&2
+  exit 1
+fi
+
+UPDATER_FILENAME="$(basename "$UPDATER_ARCHIVE")"
+UPDATER_SIGNATURE_VALUE="$(cat "$UPDATER_SIGNATURE")"
+cat > latest.json <<EOF
+{
+  "version": "$VERSION_NO_V",
+  "notes": "Packaged macOS preview release.",
+  "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "$UPDATER_SIGNATURE_VALUE",
+      "url": "https://github.com/petertzy/deepLocal/releases/download/$RELEASE_VERSION/$UPDATER_FILENAME"
+    }
+  }
+}
+EOF
+
 gh release create "$RELEASE_VERSION" \
   dist/deepLocal-macos.zip \
   dist/deepLocal-macos.dmg \
+  "$UPDATER_ARCHIVE" \
+  "$UPDATER_SIGNATURE" \
+  latest.json \
   --title "deepLocal $RELEASE_VERSION" \
   --notes "Packaged macOS preview release.
 

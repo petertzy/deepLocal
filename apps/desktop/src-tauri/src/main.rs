@@ -13,6 +13,7 @@ fn main() -> anyhow::Result<()> {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let models_directory = desktop_models_directory(app)?;
             fs::create_dir_all(&models_directory)?;

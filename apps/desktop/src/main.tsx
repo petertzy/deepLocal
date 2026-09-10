@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
 import ReactMarkdown from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -474,12 +475,37 @@ function App() {
   const [hfToken, setHfToken] = useState(() => window.localStorage.getItem("deeplocal:hf-token") ?? "");
   const [suggestionLanguage, setSuggestionLanguage] = useState(() => readStringStorage(CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY, "English"));
   const [notices, setNotices] = useState<Partial<Record<Tab, string>>>({});
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [loadOptionsByModel, setLoadOptionsByModel] = useState<StoredModelLoadOptions>(() => readStoredModelLoadOptions());
   const fallbackLoadOptions = useMemo(() => defaultLoadOptions(hardware), [hardware]);
   const notice = notices[tab];
 
   function updateNotice(page: Tab, message: string) {
     setNotices((current) => ({ ...current, [page]: message }));
+  }
+
+  async function checkForUpdates() {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      updateNotice("settings", "Updates are available only in the packaged app.");
+      return;
+    }
+    setUpdateBusy(true);
+    try {
+      const update = await check();
+      if (!update) {
+        updateNotice("settings", "deepLocal is up to date.");
+        return;
+      }
+      updateNotice("settings", `Version ${update.version} is available.`);
+      if (window.confirm(`deepLocal ${update.version} is available. Download and install it now?`)) {
+        await update.downloadAndInstall();
+        updateNotice("settings", "Update installed. Restart deepLocal to use the new version.");
+      }
+    } catch (error) {
+      updateNotice("settings", `Update check failed: ${String(error)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
   }
 
   function saveCurrentScrollPosition() {
@@ -624,6 +650,11 @@ function App() {
               <RefreshCw size={18} />
               Refresh
             </button>
+            {tab === "settings" && (
+              <button className="secondaryAction" onClick={checkForUpdates} disabled={updateBusy}>
+                {updateBusy ? "Checking..." : "Check for updates"}
+              </button>
+            )}
           </div>
         </header>
 

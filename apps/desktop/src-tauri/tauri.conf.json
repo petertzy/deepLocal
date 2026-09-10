@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app"],
     "category": "DeveloperTool",
     "shortDescription": "Local-first AI workbench for GGUF models",
@@ -35,6 +36,14 @@
     "externalBin": [],
     "resources": {
       "resources/llama-runtime": "llama-runtime"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "$TAURI_UPDATER_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/petertzy/deepLocal/releases/latest/download/latest.json"
+      ]
     }
   }
 }
