@@ -84,9 +84,11 @@ fi
 TAURI_CONFIG="$ROOT_DIR/apps/desktop/src-tauri/tauri.conf.json"
 ORIGINAL_CONFIG="$(mktemp)"
 PACKAGING_CONFIG="$(mktemp "${TMPDIR:-/tmp}/deeplocal-release-config.XXXXXX.json")"
+LATEST_JSON="$ROOT_DIR/latest.json"
 cleanup_config() {
   rm -f "$ORIGINAL_CONFIG"
   rm -f "$PACKAGING_CONFIG"
+  rm -f "$LATEST_JSON"
 }
 trap cleanup_config EXIT
 VERSION_NO_V="${RELEASE_VERSION#v}"
@@ -120,7 +122,7 @@ fi
 
 UPDATER_FILENAME="$(basename "$UPDATER_ARCHIVE")"
 UPDATER_SIGNATURE_VALUE="$(cat "$UPDATER_SIGNATURE")"
-cat > latest.json <<EOF
+cat > "$LATEST_JSON" <<EOF
 {
   "version": "$VERSION_NO_V",
   "notes": "Packaged macOS preview release.",
@@ -139,7 +141,7 @@ gh release create "$RELEASE_VERSION" \
   dist/deepLocal-macos.dmg \
   "$UPDATER_ARCHIVE" \
   "$UPDATER_SIGNATURE" \
-  latest.json \
+  "$LATEST_JSON" \
   --title "deepLocal $RELEASE_VERSION" \
   --notes "Packaged macOS preview release.
 

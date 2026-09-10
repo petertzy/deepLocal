@@ -15,6 +15,7 @@
 !/apps/desktop/src-tauri/resources/llama-runtime/
 !/apps/desktop/src-tauri/resources/llama-runtime/.gitkeep
 /dist/
+/latest.json
 /models/
 *.db
 *.db-journal
