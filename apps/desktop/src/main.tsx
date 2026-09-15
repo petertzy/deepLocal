@@ -470,7 +470,7 @@ function writeStoredModelLoadOptions(options: StoredModelLoadOptions) {
   window.localStorage.setItem(MODEL_LOAD_OPTIONS_STORAGE_KEY, JSON.stringify(options));
 }
 
-function App() {
+export function App() {
   const [tab, setTab] = useState<Tab>(() => readStoredTab());
   const tabRef = useRef(tab);
   const pageScrollPositions = useRef<Partial<Record<Tab, number>>>(readStoredScrollPositions());
@@ -3426,4 +3426,4 @@ async function mountApp() {
   }
 }
 
-void mountApp();
+if (document.getElementById("root")) void mountApp();
