@@ -854,17 +854,175 @@ async fn huggingface_auth_check(
 #[cfg(test)]
 mod tests {
     use super::{
-        absolute_path, HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest,
-        apply_huggingface_sizes,
-        calculate_eta_seconds, find_model_by_local_path, huggingface_access_message,
-        is_download_history, is_gguf_header, is_inside_models_root, model_id_from_filename,
-        openai_model_data, range_header, register_model_descriptor,
+        HuggingFaceFileResult, HuggingFaceModelResult, OpenAiChatRequest, absolute_path,
+        apply_huggingface_sizes, calculate_eta_seconds, find_model_by_local_path,
+        huggingface_access_message, is_download_history, is_gguf_header, is_inside_models_root,
+        model_id_from_filename, openai_model_data, range_header, register_model_descriptor,
         remove_empty_models_subdirectory, request_huggingface_token, sanitize_huggingface_whoami,
         unique_model_id,
     };
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use deeplocal_core::{LoadedModelStatus, ModelDescriptor, ModelHandle};
-    use deeplocal_runtime::RuntimeManager;
-    use std::{collections::{HashMap, HashSet}, path::PathBuf};
+    use deeplocal_runtime::{MockBackend, RuntimeManager};
+    use http_body_util::BodyExt;
+    use std::sync::Arc;
+    use std::{
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+    };
+    use tower::ServiceExt;
+
+    async fn response_json(response: axum::response::Response) -> serde_json::Value {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect response body")
+            .to_bytes();
+        serde_json::from_slice(&body).expect("JSON response")
+    }
+
+    fn json_request(uri: &str, payload: serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .expect("build JSON request")
+    }
+
+    fn test_model(id: &str) -> serde_json::Value {
+        serde_json::to_value(ModelDescriptor::local_gguf(id, format!("{id}.gguf")))
+            .expect("serialize test model")
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_reports_healthy_service() {
+        let app = super::router_with_cors(RuntimeManager::default(), false);
+        let response = app
+            .oneshot(
+                Request::get("/health")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("call health endpoint");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await,
+            serde_json::json!({
+                "status": "ok",
+                "name": "deepLocal"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn model_registration_endpoint_creates_model_and_rejects_duplicate_id() {
+        let app = super::router_with_cors(RuntimeManager::default(), false);
+        let model = test_model("api-registration-model");
+
+        let response = app
+            .clone()
+            .oneshot(json_request("/runtime/models", model.clone()))
+            .await
+            .expect("register model");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response_json(response).await["id"],
+            "api-registration-model"
+        );
+
+        let response = app
+            .oneshot(json_request("/runtime/models", model))
+            .await
+            .expect("register duplicate model");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn load_and_unload_endpoints_return_errors_for_invalid_requests() {
+        let app = super::router_with_cors(RuntimeManager::default(), false);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/models/load",
+                serde_json::json!({ "model_id": "missing-model" }),
+            ))
+            .await
+            .expect("load missing model");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .oneshot(json_request(
+                "/runtime/models/unload",
+                serde_json::json!({ "model_id": "not-loaded" }),
+            ))
+            .await
+            .expect("unload missing model");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn openai_chat_endpoint_parses_request_and_returns_mock_completion() {
+        let runtime = RuntimeManager::default();
+        runtime.register_backend(Arc::new(MockBackend)).await;
+        let app = super::router_with_cors(runtime, false);
+
+        let model = test_model("api-chat-model");
+        let response = app
+            .clone()
+            .oneshot(json_request("/runtime/models", model))
+            .await
+            .expect("register chat model");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/models/load",
+                serde_json::json!({ "model_id": "api-chat-model", "backend": "mock" }),
+            ))
+            .await
+            .expect("load chat model");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/chat/completions",
+                serde_json::json!({
+                    "model": "api-chat-model",
+                    "messages": [
+                        { "role": "system", "content": "You are concise." },
+                        { "role": "user", "content": "hello API" }
+                    ],
+                    "temperature": 0.2,
+                    "top_p": 0.8,
+                    "max_tokens": 32,
+                    "stop": "END",
+                    "stream": false,
+                    "unsupported_client_field": true
+                }),
+            ))
+            .await
+            .expect("complete chat request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["object"], "chat.completion");
+        assert_eq!(body["model"], "api-chat-model");
+        assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+        assert!(
+            body["choices"][0]["message"]["content"]
+                .as_str()
+                .expect("completion content")
+                .contains("hello API")
+        );
+    }
 
     #[test]
     fn eta_uses_remaining_bytes_and_speed() {
@@ -913,8 +1071,14 @@ mod tests {
 
     #[test]
     fn model_delete_paths_must_stay_inside_models_root() {
-        assert!(is_inside_models_root("./models/example/model.gguf", &absolute_path(PathBuf::from("./models"))));
-        assert!(!is_inside_models_root("../outside/model.gguf", &absolute_path(PathBuf::from("./models"))));
+        assert!(is_inside_models_root(
+            "./models/example/model.gguf",
+            &absolute_path(PathBuf::from("./models"))
+        ));
+        assert!(!is_inside_models_root(
+            "../outside/model.gguf",
+            &absolute_path(PathBuf::from("./models"))
+        ));
     }
 
     #[test]
@@ -1433,7 +1597,6 @@ async fn huggingface_download(
     (axum::http::StatusCode::ACCEPTED, Json(job)).into_response()
 }
 
-
 fn is_gguf_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -1482,10 +1645,7 @@ fn is_inside_models_root(path: &str, models_root: &Path) -> bool {
     path.starts_with(models_root)
 }
 
-fn remove_empty_models_subdirectory(
-    path: &str,
-    models_root: &Path,
-) -> std::io::Result<bool> {
+fn remove_empty_models_subdirectory(path: &str, models_root: &Path) -> std::io::Result<bool> {
     let path = absolute_path(PathBuf::from(path));
     let Some(parent) = path.parent() else {
         return Ok(false);
