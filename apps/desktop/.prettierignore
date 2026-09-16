@@ -1,0 +1,14 @@
+node_modules
+dist
+test-results
+playwright-report
+src-tauri/gen
+src-tauri/resources
+src-tauri/tauri.conf.json
+src/main.tsx
+src/styles.css
+tests/app.test.tsx
+tests/model-access.spec.ts
+tests/setup.ts
+tests/smoke.spec.ts
+vitest.config.ts

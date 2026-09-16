@@ -419,10 +419,24 @@ Contributions are welcome. A good first path is:
 Useful local checks:
 
 ```bash
-cargo check
-cargo test
-./scripts/start-dev.sh --build
+./scripts/check.sh
 ```
+
+Formatting commands:
+
+```bash
+# Rust
+cargo fmt --all
+cargo fmt --all -- --check
+
+# Frontend
+cd apps/desktop
+npm run format
+npm run format:check
+```
+
+`./scripts/check.sh` runs the common Rust and frontend formatting, type,
+build, and test checks together.
 
 Do not commit downloaded models, tokens, local databases, `target/`,
 `node_modules/`, or build output.

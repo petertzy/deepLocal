@@ -51,9 +51,29 @@ clear.
 Run these before opening a pull request when possible:
 
 ```bash
-cargo check
-cargo test
-./scripts/start-dev.sh --build
+./scripts/check.sh
+```
+
+The combined check runs Rust formatting, Rust checks and tests, frontend
+formatting, the frontend build, and frontend component tests. To run individual
+commands:
+
+```bash
+# Rust formatting
+cargo fmt --all
+cargo fmt --all -- --check
+
+# Frontend formatting
+cd apps/desktop
+npm run format
+npm run format:check
+```
+
+The end-to-end tests use Playwright and mock API responses, so they do not
+download real models:
+
+```bash
+npm run test:e2e:smoke
 ```
 
 If a check fails for an environment reason, mention that in the pull request.
