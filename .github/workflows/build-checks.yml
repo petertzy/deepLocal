@@ -15,6 +15,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
