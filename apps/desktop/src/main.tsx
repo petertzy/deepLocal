@@ -114,6 +114,12 @@ type HuggingFaceModelFile = {
   likes?: number | null;
 };
 
+type PendingRiskyDownload = {
+  repo: string;
+  filename: string;
+  sizeBytes: number;
+};
+
 const accessCheckLabels = {
   public: "Public",
   token_access: "Token access",
@@ -1481,6 +1487,7 @@ function Models({
   const [showAuxiliaryFiles, setShowAuxiliaryFiles] = useState(initialUiState.showAuxiliaryFiles);
   const [searching, setSearching] = useState(false);
   const [pendingRiskyLoad, setPendingRiskyLoad] = useState<ModelDescriptor | null>(null);
+  const [pendingRiskyDownload, setPendingRiskyDownload] = useState<PendingRiskyDownload | null>(null);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(initialUiState.detailsModelId);
   const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>(initialUiState.discoveredFiles);
@@ -1698,7 +1705,7 @@ function Models({
 
   function isRiskyLoad(model: ModelDescriptor) {
     const size = modelSizeBytes(model);
-    return size !== undefined && size > 0 && hardware?.available_ram_bytes !== undefined && size > hardware.available_ram_bytes;
+    return size !== undefined && size > 0 && !!hardware && hardware.available_ram_bytes > 0 && size > hardware.available_ram_bytes;
   }
 
   async function load(modelId: string, bypassMemoryWarning = false) {
@@ -1797,6 +1804,18 @@ function Models({
       onNotice(message || `Failed to start download for ${filename}.`);
     }
     await onRefresh();
+  }
+
+  function isRiskyDownload(sizeBytes?: number | null) {
+    return sizeBytes !== undefined && sizeBytes !== null && sizeBytes > 0 && !!hardware && hardware.available_ram_bytes > 0 && sizeBytes > hardware.available_ram_bytes;
+  }
+
+  function startDownload(repo: string, filename: string, sizeBytes?: number | null, bypassMemoryWarning = false) {
+    if (!bypassMemoryWarning && isRiskyDownload(sizeBytes)) {
+      setPendingRiskyDownload({ repo, filename, sizeBytes: sizeBytes! });
+      return;
+    }
+    void downloadFile(repo, filename, sizeBytes);
   }
 
   async function cancelDownload(job: DownloadJob) {
@@ -2031,6 +2050,7 @@ function Models({
             const access = accessChecks[key];
             const job = downloadByFile.get(key) ?? pendingDownloads[key];
             const canCancel = !!job && ["queued", "starting", "downloading", "cancelling"].includes(job.status);
+            const riskyDownload = isRiskyDownload(file.size_bytes);
             return (
               <article className="searchModelCard" key={`${file.repo}-${file.filename}`}>
                 <div>
@@ -2049,6 +2069,11 @@ function Models({
                   <span>{file.downloads ?? 0} source downloads</span>
                   <span>{file.likes ?? 0} source likes</span>
                 </div>
+                {riskyDownload && (
+                  <p className="memoryWarning" role="status">
+                    May not fit: {formatFileSize(file.size_bytes)} model, {formatBytes(hardware?.available_ram_bytes ?? 0)} RAM available.
+                  </p>
+                )}
                 {access && (
                   <div className="accessFeedback" role="status" aria-live="polite">
                     <div>
@@ -2109,7 +2134,7 @@ function Models({
                   ) : (
                     <button
                       disabled={job?.status === "downloaded"}
-                      onClick={() => downloadFile(file.repo, file.filename, file.size_bytes)}
+                      onClick={() => startDownload(file.repo, file.filename, file.size_bytes)}
                     >
                       <Download size={15} />
                       {job ? downloadActionLabel(job) : "Download"}
@@ -2141,7 +2166,7 @@ function Models({
                   <div className="downloadActions">
                     {job.status !== "downloaded" && (
                       <>
-                        <button onClick={() => downloadFile(job.repo, job.filename, job.total_bytes)}>
+                        <button onClick={() => startDownload(job.repo, job.filename, job.total_bytes)}>
                           <Download size={15} />
                           Retry
                         </button>
@@ -2295,6 +2320,20 @@ function Models({
             const modelId = pendingRiskyLoad.id;
             setPendingRiskyLoad(null);
             void load(modelId, true);
+          }}
+        />
+      )}
+      {pendingRiskyDownload && (
+        <ConfirmationDialog
+          title="Model may not fit"
+          message={`${pendingRiskyDownload.filename} is ${formatFileSize(pendingRiskyDownload.sizeBytes)}, but only ${formatBytes(hardware?.available_ram_bytes ?? 0)} RAM is available.`}
+          detail="Download anyway? Loading this model later may fail or make your system unresponsive."
+          confirmLabel="Download anyway"
+          onCancel={() => setPendingRiskyDownload(null)}
+          onConfirm={() => {
+            const download = pendingRiskyDownload;
+            setPendingRiskyDownload(null);
+            startDownload(download.repo, download.filename, download.sizeBytes, true);
           }}
         />
       )}

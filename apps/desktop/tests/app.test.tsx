@@ -101,7 +101,7 @@ describe("core frontend flows", () => {
   });
 
   it("shows download state transitions from queued to downloading", async () => {
-    const state = apiState();
+    const state = apiState() as Record<string, unknown>;
     const fetchMock = installFetch(state, true);
     render(<App />);
     await navigate("Models");
@@ -114,6 +114,59 @@ describe("core frontend flows", () => {
 
     await waitFor(() => expect(within(card).getByText("Downloading")).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/runtime/huggingface/download"), expect.objectContaining({ method: "POST" }));
+  });
+
+  it("warns before downloading a search result larger than available RAM", async () => {
+    const riskySearchResult = {
+      ...searchResult,
+      files: [{ filename: "gemma-large-Q4_K_M.gguf", size_bytes: 20_000_000_000 }],
+    };
+    const state = apiState() as Record<string, unknown>;
+    const fetchMock = installFetch(state, true);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/huggingface/search") return jsonResponse([riskySearchResult]);
+      if (path === "/runtime/huggingface/download") return jsonResponse({ status: "queued" });
+      return jsonResponse(state[path] ?? []);
+    });
+    render(<App />);
+    await navigate("Models");
+    await userEvent.type(screen.getByRole("textbox", { name: "Search Hugging Face models" }), "gemma");
+    await userEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+
+    const card = await screen.findByRole("heading", { name: "gemma-large-Q4_K_M.gguf" });
+    expect(within(card.closest("article")!).getByText(/May not fit/)).toBeInTheDocument();
+    await userEvent.click(within(card.closest("article")!).getByRole("button", { name: /^Download$/ }));
+    expect(await screen.findByRole("heading", { name: "Model may not fit" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/runtime/huggingface/download"), expect.anything());
+
+    await userEvent.click(screen.getByRole("button", { name: "Download anyway" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/runtime/huggingface/download"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
+  it("does not mark every search result risky when available RAM is unknown", async () => {
+    const state = apiState() as Record<string, unknown>;
+    state["/runtime/hardware"] = {
+      ...(state["/runtime/hardware"] as Record<string, unknown>),
+      available_ram_bytes: 0,
+    };
+    const fetchMock = installFetch(state, true);
+    render(<App />);
+    await navigate("Models");
+    await userEvent.type(screen.getByRole("textbox", { name: "Search Hugging Face models" }), "gemma");
+    await userEvent.click(screen.getByRole("button", { name: /^Search$/ }));
+
+    const card = (await screen.findByRole("heading", { name: "llama-example-Q4_K_M.gguf" })).closest("article")!;
+    expect(within(card).queryByText(/May not fit/)).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: /^Download$/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/runtime/huggingface/download"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+    expect(screen.queryByRole("heading", { name: "Model may not fit" })).not.toBeInTheDocument();
   });
 
   it("shows the chat empty state when no model is loaded", async () => {

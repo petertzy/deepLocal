@@ -4,6 +4,8 @@ use sysinfo::System;
 pub fn detect_hardware() -> HardwareProfile {
     let mut system = System::new_all();
     system.refresh_all();
+    let total_ram_bytes = system.total_memory();
+    let available_ram_bytes = system.available_memory().max(total_ram_bytes.saturating_sub(system.used_memory()));
 
     let cpu_brand = system
         .cpus()
@@ -16,8 +18,8 @@ pub fn detect_hardware() -> HardwareProfile {
         arch: std::env::consts::ARCH.to_string(),
         cpu_brand,
         cpu_cores: num_cpus::get(),
-        total_ram_bytes: system.total_memory(),
-        available_ram_bytes: system.available_memory(),
+        total_ram_bytes,
+        available_ram_bytes,
         gpu: vec![GpuInfo {
             name: "GPU detection pending".to_string(),
             vendor: None,
