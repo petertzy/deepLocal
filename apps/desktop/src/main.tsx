@@ -712,6 +712,7 @@ export function App() {
           <Models
             models={models}
             loaded={loaded}
+            hardware={hardware}
             downloads={downloads}
             modelsDirectory={modelsDirectory}
             hfToken={hfToken}
@@ -1446,6 +1447,7 @@ function Chat({
 function Models({
   models,
   loaded,
+  hardware,
   downloads,
   modelsDirectory,
   hfToken,
@@ -1457,6 +1459,7 @@ function Models({
 }: {
   models: ModelDescriptor[];
   loaded: LoadedModel[];
+  hardware: HardwareProfile | null;
   downloads: DownloadJob[];
   modelsDirectory: string;
   hfToken: string;
@@ -1477,6 +1480,7 @@ function Models({
   const [sortBy, setSortBy] = useState<SearchSort>(initialUiState.sortBy);
   const [showAuxiliaryFiles, setShowAuxiliaryFiles] = useState(initialUiState.showAuxiliaryFiles);
   const [searching, setSearching] = useState(false);
+  const [pendingRiskyLoad, setPendingRiskyLoad] = useState<ModelDescriptor | null>(null);
   const [pendingDownloads, setPendingDownloads] = useState<Record<string, DownloadJob>>({});
   const [detailsModelId, setDetailsModelId] = useState<string | null>(initialUiState.detailsModelId);
   const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredModelFile[]>(initialUiState.discoveredFiles);
@@ -1688,7 +1692,21 @@ function Models({
     }
   }
 
-  async function load(modelId: string) {
+  function modelSizeBytes(model: ModelDescriptor) {
+    return model.size_bytes ?? (model.files?.reduce((total, file) => total + (file.size_bytes ?? 0), 0) || undefined);
+  }
+
+  function isRiskyLoad(model: ModelDescriptor) {
+    const size = modelSizeBytes(model);
+    return size !== undefined && size > 0 && hardware?.available_ram_bytes !== undefined && size > hardware.available_ram_bytes;
+  }
+
+  async function load(modelId: string, bypassMemoryWarning = false) {
+    const model = models.find((item) => item.id === modelId);
+    if (!bypassMemoryWarning && model && isRiskyLoad(model)) {
+      setPendingRiskyLoad(model);
+      return;
+    }
     const options = loadOptionsForModel(modelId);
     const res = await fetch(`${API_BASE}/runtime/models/load`, {
       method: "POST",
@@ -2264,6 +2282,20 @@ function Models({
           onUnload={() => unload(detailsModel.id)}
           onReveal={() => revealModel(detailsModel, detailsPath)}
           onDelete={() => setDeleteModelTarget({ model: detailsModel, modelPath: detailsPath })}
+        />
+      )}
+      {pendingRiskyLoad && (
+        <ConfirmationDialog
+          title="Large model may not fit"
+          message={`${pendingRiskyLoad.name} is ${formatFileSize(modelSizeBytes(pendingRiskyLoad))}, but only ${formatBytes(hardware?.available_ram_bytes ?? 0)} RAM is available.`}
+          detail="Loading may fail or make your system unresponsive. Advanced users can continue anyway."
+          confirmLabel="Load anyway"
+          onCancel={() => setPendingRiskyLoad(null)}
+          onConfirm={() => {
+            const modelId = pendingRiskyLoad.id;
+            setPendingRiskyLoad(null);
+            void load(modelId, true);
+          }}
         />
       )}
       {discardTarget && (

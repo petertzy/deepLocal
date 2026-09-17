@@ -35,7 +35,13 @@ function jsonResponse(value: unknown, ok = true) {
 function apiState(options: { models?: unknown[]; loaded?: unknown[]; downloads?: unknown[]; conversations?: unknown[] } = {}) {
   return {
     "/health": { status: "ok" },
-    "/runtime/hardware": { os: "test", arch: "test", cpu_brand: "test", total_ram_bytes: 16_000_000_000 },
+    "/runtime/hardware": {
+      os: "test",
+      arch: "test",
+      cpu_brand: "test",
+      total_ram_bytes: 16_000_000_000,
+      available_ram_bytes: 16_000_000_000,
+    },
     "/runtime/models": options.models ?? [],
     "/runtime/models/loaded": options.loaded ?? [],
     "/runtime/downloads": options.downloads ?? [],
@@ -117,6 +123,41 @@ describe("core frontend flows", () => {
 
     expect(await screen.findByText("Load a model to start chatting")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open models" })).toBeInTheDocument();
+  });
+
+  it("warns before loading a model larger than available RAM and allows override", async () => {
+    const riskyModel = { ...model, size_bytes: 20_000_000_000 };
+    const state = apiState({ models: [riskyModel] });
+    const fetchMock = installFetch(state);
+    render(<App />);
+    await navigate("Models");
+
+    const card = screen.getByRole("heading", { name: riskyModel.name }).closest("article")!;
+    await userEvent.click(within(card).getByRole("button", { name: /^Load$/ }));
+    expect(await screen.findByRole("heading", { name: "Large model may not fit" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/runtime/models/load"), expect.anything());
+
+    await userEvent.click(screen.getByRole("button", { name: "Load anyway" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/runtime/models/load"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+  });
+
+  it("loads a model immediately when it fits in available RAM", async () => {
+    const fittingModel = { ...model, size_bytes: 1_000_000_000 };
+    const state = apiState({ models: [fittingModel] });
+    const fetchMock = installFetch(state);
+    render(<App />);
+    await navigate("Models");
+
+    const card = screen.getByRole("heading", { name: fittingModel.name }).closest("article")!;
+    await userEvent.click(within(card).getByRole("button", { name: /^Load$/ }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/runtime/models/load"),
+      expect.objectContaining({ method: "POST" }),
+    ));
+    expect(screen.queryByRole("heading", { name: "Large model may not fit" })).not.toBeInTheDocument();
   });
 
   it("shows the loaded-model chat state", async () => {
