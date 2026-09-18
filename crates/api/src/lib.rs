@@ -78,6 +78,7 @@ pub fn router_with_models_directory(
         .route("/runtime/hardware", get(hardware))
         .route("/runtime/backends", get(backends))
         .route("/runtime/models", get(models).post(register_model))
+        .route("/runtime/models/import", post(import_model))
         .route("/runtime/models/delete", post(delete_model))
         .route("/runtime/models/loaded", get(loaded_models))
         .route("/runtime/models/load", post(load_model))
@@ -211,6 +212,155 @@ async fn register_model(
         Err(response) => return response,
     };
     (axum::http::StatusCode::CREATED, Json(model)).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportModelRequest {
+    model_id: String,
+    source_path: String,
+    #[serde(default)]
+    copy_to_models: bool,
+}
+
+async fn import_model(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<ImportModelRequest>,
+) -> impl IntoResponse {
+    let model_id = request.model_id.trim();
+    if model_id.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Model ID cannot be empty.",
+        )
+            .into_response();
+    }
+
+    let source_path = PathBuf::from(&request.source_path);
+    let source_path = match std::fs::canonicalize(&source_path) {
+        Ok(path) => path,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                "The selected GGUF file no longer exists or cannot be accessed.",
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = validate_import_gguf(&source_path) {
+        return (axum::http::StatusCode::BAD_REQUEST, error).into_response();
+    }
+
+    let local_path = if request.copy_to_models {
+        let destination = match import_destination(&state.models_directory, model_id, &source_path)
+        {
+            Ok(path) => path,
+            Err(error) => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    error.to_string(),
+                )
+                    .into_response();
+            }
+        };
+        if let Err(error) = copy_model_file(&source_path, &destination) {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not copy the GGUF file: {error}"),
+            )
+                .into_response();
+        }
+        destination
+    } else {
+        source_path
+    };
+
+    let model = ModelDescriptor::local_gguf(model_id, local_path.to_string_lossy().to_string());
+    match register_model_descriptor(&state.runtime, model).await {
+        Ok(model) => (axum::http::StatusCode::CREATED, Json(model)).into_response(),
+        Err(response) => {
+            if request.copy_to_models {
+                let _ = std::fs::remove_file(&local_path);
+            }
+            response
+        }
+    }
+}
+
+fn validate_import_gguf(path: &Path) -> Result<(), &'static str> {
+    if !is_gguf_path(path) {
+        return Err("Choose a file with the .gguf extension.");
+    }
+    let metadata =
+        std::fs::metadata(path).map_err(|_| "The selected GGUF file could not be accessed.")?;
+    if !metadata.is_file() {
+        return Err("The selected path is not a file.");
+    }
+    if metadata.len() < 4 {
+        return Err("The selected file is empty or too small to be a GGUF model.");
+    }
+    let mut file =
+        std::fs::File::open(path).map_err(|_| "The selected GGUF file could not be read.")?;
+    let mut header = [0_u8; 4];
+    std::io::Read::read_exact(&mut file, &mut header)
+        .map_err(|_| "The selected GGUF file could not be read.")?;
+    if !is_gguf_header(&header) {
+        return Err("The selected file does not have a valid GGUF header.");
+    }
+    Ok(())
+}
+
+fn import_destination(
+    models_directory: &Path,
+    model_id: &str,
+    source: &Path,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(models_directory)?;
+    let safe_id: String = model_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || "-_".contains(character) {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let base = if safe_id.trim_matches('-').is_empty() {
+        "local-model"
+    } else {
+        &safe_id
+    };
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("gguf");
+    for index in 0.. {
+        let filename = if index == 0 {
+            format!("{base}.{extension}")
+        } else {
+            format!("{base}-{index}.{extension}")
+        };
+        let destination = models_directory.join(filename);
+        if !destination.exists() {
+            return Ok(destination);
+        }
+    }
+    unreachable!()
+}
+
+fn copy_model_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut input = std::fs::File::open(source)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    if let Err(error) = std::io::copy(&mut input, &mut output).and_then(|_| output.flush()) {
+        let _ = std::fs::remove_file(destination);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1034,6 +1184,96 @@ mod tests {
             .await
             .expect("register duplicate model");
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn importing_model_keeps_source_by_default_and_can_copy_into_models_directory() {
+        let root = std::env::temp_dir().join(format!("deeplocal-import-{}", Uuid::new_v4()));
+        let source_directory = root.join("external");
+        let models_directory = root.join("models");
+        std::fs::create_dir_all(&source_directory).expect("create source directory");
+        let source = source_directory.join("tiny.gguf");
+        std::fs::write(&source, b"GGUFtest model bytes").expect("write valid GGUF fixture");
+        let app = super::router_with_models_directory(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            models_directory.clone(),
+        );
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/models/import",
+                serde_json::json!({ "model_id": "external-model", "source_path": source.clone(), "copy_to_models": false }),
+            ))
+            .await
+            .expect("import without copying");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let registered = response_json(response).await;
+        assert_eq!(
+            PathBuf::from(registered["local_path"].as_str().unwrap()),
+            std::fs::canonicalize(&source).unwrap()
+        );
+        assert!(!models_directory.exists());
+
+        let second_source = source_directory.join("copy.gguf");
+        std::fs::write(&second_source, b"GGUFanother model bytes").expect("write copy fixture");
+        let response = app
+            .oneshot(json_request(
+                "/runtime/models/import",
+                serde_json::json!({ "model_id": "copied-model", "source_path": second_source.clone(), "copy_to_models": true }),
+            ))
+            .await
+            .expect("import with copy");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let registered = response_json(response).await;
+        let copied_path = PathBuf::from(registered["local_path"].as_str().unwrap());
+        assert!(copied_path.starts_with(&models_directory));
+        assert_eq!(
+            std::fs::read(copied_path).unwrap(),
+            b"GGUFanother model bytes"
+        );
+        assert!(second_source.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn model_import_rejects_missing_or_invalid_gguf_files() {
+        let root =
+            std::env::temp_dir().join(format!("deeplocal-import-invalid-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let invalid = root.join("not-a-model.gguf");
+        std::fs::write(&invalid, b"HTMLnot a model").expect("write invalid fixture");
+        let app = super::router_with_models_directory(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            root.join("models"),
+        );
+
+        for source_path in [root.join("missing.gguf"), invalid] {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    "/runtime/models/import",
+                    serde_json::json!({ "model_id": "invalid-model", "source_path": source_path }),
+                ))
+                .await
+                .expect("reject invalid import");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runtime/models")
+                    .body(Body::empty())
+                    .expect("build model list request"),
+            )
+            .await
+            .expect("list models after rejected imports");
+        assert_eq!(response_json(response).await.as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

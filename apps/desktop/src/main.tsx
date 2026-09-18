@@ -1712,6 +1712,7 @@ function Models({
   const modelFileInputRef = useRef<HTMLInputElement | null>(null);
   const [id, setId] = useState(initialUiState.id);
   const [path, setPath] = useState(initialUiState.path);
+  const [copyImportedModel, setCopyImportedModel] = useState(false);
   const [pathDragOver, setPathDragOver] = useState(false);
   const [query, setQuery] = useState(initialUiState.query);
   const [results, setResults] = useState<HuggingFaceResult[]>(initialUiState.results);
@@ -1852,14 +1853,17 @@ function Models({
       onNotice("Enter a model id and GGUF file path before registering.");
       return;
     }
-    const descriptor = createLocalDescriptor(id, path);
-    const res = await fetch(`${API_BASE}/runtime/models`, {
+    const res = await fetch(`${API_BASE}/runtime/models/import`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(descriptor),
+      body: JSON.stringify({ model_id: id.trim(), source_path: path, copy_to_models: copyImportedModel }),
     });
-    onNotice(res.ok ? `Registered ${id}.` : await res.text());
-    await onRefresh();
+    if (res.ok) {
+      onNotice(copyImportedModel ? `Imported ${id} into the models folder.` : `Registered ${id} without copying the file.`);
+      await onRefresh();
+    } else {
+      onNotice(await res.text());
+    }
   }
 
   function updateManualPath(value: string) {
@@ -2470,6 +2474,15 @@ function Models({
             Register
           </button>
         </div>
+        <label className="copyImportedModelOption">
+          <input
+            type="checkbox"
+            checked={copyImportedModel}
+            onChange={(event) => setCopyImportedModel(event.target.checked)}
+          />
+          <span>Copy file into {modelsDirectory}</span>
+          <small>Off by default. When off, the model stays in its current folder.</small>
+        </label>
       </section>
       <div className="registeredModelList">
         {models.map((model) => {

@@ -550,6 +550,29 @@ article p {
   background: #e7f5f0;
 }
 
+.copyImportedModelOption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 9px;
+  color: #273238;
+  font-size: 13px;
+}
+
+.copyImportedModelOption input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #287767;
+}
+
+.copyImportedModelOption small {
+  flex-basis: 100%;
+  margin-left: 24px;
+  color: #66727a;
+  font-size: 12px;
+}
+
 .discoverPanel,
 .discoveredPanel,
 .manualRegistration,
