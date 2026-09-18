@@ -308,7 +308,9 @@ http://127.0.0.1:14567/v1
 ```
 
 Packaged app base URL: the app assigns an available `127.0.0.1` port at startup;
-it is intentionally not fixed and is not part of the public API contract.
+it is intentionally not fixed and is not part of the public API contract. Copy
+the actual base URL shown on the app's **Server** page when using the packaged
+app. The fixed URL above is for development mode.
 
 Endpoints:
 
@@ -330,7 +332,9 @@ curl http://127.0.0.1:14567/v1/chat/completions \
   }'
 ```
 
-Load a model in the UI first, then use that model ID in API calls.
+Load a model in the UI first, then use its model ID in API calls. Find and copy
+the exact ID on the **Server** page; model IDs are not necessarily the model's
+display name.
 
 Python with the OpenAI SDK:
 
@@ -371,6 +375,24 @@ const response = await client.chat.completions.create({
 
 console.log(response.choices[0]?.message?.content);
 ```
+
+### Troubleshooting Connection Errors
+
+- **Connection refused / failed to fetch:** Make sure deepLocal is running and
+  its local API is online. In development, start it with `./scripts/start-dev.sh`.
+  In the packaged app, use the base URL displayed on the **Server** page because
+  its port is assigned dynamically.
+- **The health check does not respond:** For the development server, run
+  `curl http://127.0.0.1:14567/health`. If it fails, restart deepLocal and check
+  the backend terminal output or the app's **Server** page for its status.
+- **The request reaches the API but returns an error:** Check that the model is
+  loaded and that the `model` value exactly matches an ID shown on the
+  **Server** page. `GET /v1/models` lists the models currently available to API
+  clients.
+- **A client on another computer cannot connect:** The API binds to
+  `127.0.0.1` by default and accepts local connections only. LAN access requires
+  explicitly changing the host binding; see [Network Access](#network-access)
+  and only enable it on a trusted network.
 
 ## Hugging Face Access
 
