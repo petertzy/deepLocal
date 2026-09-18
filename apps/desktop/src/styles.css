@@ -1380,7 +1380,7 @@ progress {
 
 .composer {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) 108px;
+  grid-template-columns: auto auto auto minmax(0, 1fr) 108px;
   align-items: center;
   gap: 10px;
   padding-top: 10px;
@@ -1402,6 +1402,87 @@ progress {
   width: 16px;
   min-height: 16px;
   accent-color: #2f6f62;
+}
+
+.documentToggle {
+  color: #245f53;
+}
+
+.documentToggle input:disabled + span {
+  color: #8a969c;
+}
+
+.documentsPane {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.documentsPane .paneHeader > div {
+  display: grid;
+  gap: 4px;
+}
+
+.documentsPane .paneHeader p {
+  color: #66727a;
+  font-size: 13px;
+}
+
+.documentList {
+  display: grid;
+  gap: 10px;
+}
+
+.documentRow {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #dde2e4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.documentIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  color: #245f53;
+  background: #e7f5f0;
+}
+
+.documentInfo {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.documentInfo strong,
+.documentInfo span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documentInfo span {
+  color: #66727a;
+  font-size: 13px;
+}
+
+.documentActions {
+  display: flex;
+  gap: 8px;
+}
+
+.documentActions button {
+  min-width: 0;
+  padding: 0 12px;
 }
 
 .composer .promptIdeaButton {
@@ -1760,6 +1841,16 @@ label {
 }
 
 @media (max-width: 960px) {
+  header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .headerControls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
   .dashboard,
   .settingsGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1779,7 +1870,7 @@ label {
   }
 
   nav {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     margin-top: 12px;
   }
 
@@ -1871,6 +1962,15 @@ label {
   .chatModelPicker,
   .emptyState {
     grid-template-columns: 1fr;
+  }
+
+  .documentRow {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .documentActions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
   }
 
   .composer {

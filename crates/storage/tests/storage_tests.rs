@@ -1,6 +1,7 @@
 use chrono::Utc;
-use deeplocal_core::{ChatRole, DownloadJob, ModelDescriptor};
+use deeplocal_core::{ChatRole, DocumentChunk, DownloadJob, LocalDocument, ModelDescriptor};
 use deeplocal_storage::Storage;
+use uuid::Uuid;
 
 #[test]
 fn stores_and_lists_models() {
@@ -93,6 +94,85 @@ fn stores_lists_and_clears_download_jobs() {
         storage
             .list_recent_download_jobs(10)
             .expect("list jobs")
+            .is_empty()
+    );
+}
+
+#[test]
+fn replaces_documents_and_persists_local_embeddings() {
+    let storage = Storage::open_memory().expect("open storage");
+    let now = Utc::now();
+    let first_id = Uuid::new_v4();
+    let document = LocalDocument {
+        id: first_id,
+        name: "notes.md".to_string(),
+        source_key: "upload:notes.md".to_string(),
+        character_count: 42,
+        chunk_count: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let first_chunk = DocumentChunk {
+        id: Uuid::new_v4(),
+        document_id: first_id,
+        chunk_index: 0,
+        content: "Local documents stay on this device.".to_string(),
+        embedding: vec![0.0, 0.75, -0.25],
+    };
+
+    storage
+        .replace_document(&document, &[first_chunk])
+        .expect("store document");
+    let documents = storage.list_documents().expect("list documents");
+    let chunks = storage
+        .list_indexed_document_chunks()
+        .expect("list document chunks");
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].name, "notes.md");
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].embedding, vec![0.0, 0.75, -0.25]);
+
+    let replacement_id = Uuid::new_v4();
+    let replacement = LocalDocument {
+        id: replacement_id,
+        name: "notes.md".to_string(),
+        source_key: "upload:notes.md".to_string(),
+        character_count: 21,
+        chunk_count: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    storage
+        .replace_document(
+            &replacement,
+            &[DocumentChunk {
+                id: Uuid::new_v4(),
+                document_id: replacement_id,
+                chunk_index: 0,
+                content: "Replacement content.".to_string(),
+                embedding: vec![1.0, 0.0, 0.0],
+            }],
+        )
+        .expect("replace document");
+
+    let documents = storage.list_documents().expect("list replacement");
+    let chunks = storage
+        .list_indexed_document_chunks()
+        .expect("list replacement chunks");
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0].id, replacement_id);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].content, "Replacement content.");
+
+    assert!(
+        storage
+            .delete_document(replacement_id)
+            .expect("delete document")
+    );
+    assert!(
+        storage
+            .list_documents()
+            .expect("list removed documents")
             .is_empty()
     );
 }

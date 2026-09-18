@@ -4,6 +4,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use tauri::{Manager, RunEvent, State, WindowEvent};
 
 const API_HOST: &str = "127.0.0.1";
+const MAX_DOCUMENT_BYTES: u64 = 8 * 1024 * 1024;
 
 struct ApiAddress(String);
 struct RuntimeState(RuntimeManager);
@@ -33,7 +34,7 @@ fn main() -> anyhow::Result<()> {
             tauri::async_runtime::spawn(start_api(models_directory, listener, port, runtime));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![api_base_url])
+        .invoke_handler(tauri::generate_handler![api_base_url, read_local_document])
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. }) {
                 // Closing the desktop window must terminate the Tauri process so
@@ -55,6 +56,65 @@ fn main() -> anyhow::Result<()> {
 #[tauri::command]
 fn api_base_url(address: State<'_, ApiAddress>) -> String {
     address.0.clone()
+}
+
+#[tauri::command]
+fn read_local_document(path: String) -> Result<serde_json::Value, String> {
+    let document_path = PathBuf::from(&path);
+    let metadata = fs::metadata(&document_path)
+        .map_err(|_| "The selected document could not be read.".to_string())?;
+    if !metadata.is_file() {
+        return Err("Select a file, not a folder.".to_string());
+    }
+    if metadata.len() > MAX_DOCUMENT_BYTES {
+        return Err(format!(
+            "The selected document is larger than the {} MB local indexing limit.",
+            MAX_DOCUMENT_BYTES / 1024 / 1024
+        ));
+    }
+    let name = document_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The selected document needs a readable filename.".to_string())?
+        .to_string();
+    if !is_supported_document_name(&name) {
+        return Err(
+            "Choose a text, Markdown, CSV, JSON, YAML, HTML, RST, or log document.".to_string(),
+        );
+    }
+    let content = fs::read_to_string(&document_path)
+        .map_err(|_| "The selected document is not a readable UTF-8 text file.".to_string())?;
+    let source_key = fs::canonicalize(&document_path)
+        .unwrap_or_else(|_| document_path.clone())
+        .to_string_lossy()
+        .to_string();
+    Ok(serde_json::json!({
+        "name": name,
+        "content": content,
+        "source_key": format!("path:{source_key}"),
+    }))
+}
+
+fn is_supported_document_name(name: &str) -> bool {
+    let extension = PathBuf::from(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "txt"
+            | "md"
+            | "markdown"
+            | "rst"
+            | "csv"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "html"
+            | "htm"
+            | "log"
+    )
 }
 
 fn desktop_models_directory(_app: &tauri::App) -> anyhow::Result<PathBuf> {

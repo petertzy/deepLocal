@@ -32,7 +32,7 @@ function jsonResponse(value: unknown, ok = true) {
   return Promise.resolve({ ok, json: async () => value, text: async () => JSON.stringify(value) } as Response);
 }
 
-function apiState(options: { models?: unknown[]; loaded?: unknown[]; downloads?: unknown[]; conversations?: unknown[] } = {}) {
+function apiState(options: { models?: unknown[]; loaded?: unknown[]; downloads?: unknown[]; conversations?: unknown[]; documents?: unknown[] } = {}) {
   return {
     "/health": { status: "ok" },
     "/runtime/hardware": {
@@ -46,6 +46,7 @@ function apiState(options: { models?: unknown[]; loaded?: unknown[]; downloads?:
     "/runtime/models/loaded": options.loaded ?? [],
     "/runtime/downloads": options.downloads ?? [],
     "/runtime/chat/conversations": options.conversations ?? [],
+    "/runtime/documents": options.documents ?? [],
     "/runtime/models/directory": { path: "/models" },
   };
 }
@@ -176,6 +177,43 @@ describe("core frontend flows", () => {
 
     expect(await screen.findByText("Load a model to start chatting")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open models" })).toBeInTheDocument();
+  });
+
+  it("indexes a selected local text document", async () => {
+    const state = apiState() as Record<string, unknown>;
+    const fetchMock = installFetch(state);
+    let uploadedDocument: Record<string, unknown> | undefined;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/documents" && init?.method === "POST") {
+        const documentRequest = JSON.parse(String(init.body)) as Record<string, unknown>;
+        uploadedDocument = documentRequest;
+        state["/runtime/documents"] = [{
+          id: "document-1",
+          name: documentRequest.name,
+          source_key: documentRequest.source_key,
+          character_count: String(documentRequest.content).length,
+          chunk_count: 1,
+          created_at: "2026-09-18T09:00:00.000Z",
+          updated_at: "2026-09-18T09:00:00.000Z",
+        }];
+        return jsonResponse(state["/runtime/documents"]);
+      }
+      return jsonResponse(state[path] ?? []);
+    });
+    render(<App />);
+    await navigate("Documents");
+
+    const picker = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(picker).not.toBeNull();
+    await userEvent.upload(picker!, new File(["The release stays entirely local."], "release-notes.md", { type: "text/markdown" }));
+
+    expect(await screen.findByText("release-notes.md")).toBeInTheDocument();
+    expect(uploadedDocument).toMatchObject({
+      name: "release-notes.md",
+      content: "The release stays entirely local.",
+      source_key: "browser:release-notes.md",
+    });
   });
 
   it("warns before loading a model larger than available RAM and allows override", async () => {

@@ -7,7 +7,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import ReactMarkdown from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
 import remarkGfm from "remark-gfm";
 import {
   Activity,
@@ -20,6 +20,7 @@ import {
   Cpu,
   Download,
   ExternalLink,
+  FileText,
   FolderOpen,
   Info,
   LoaderCircle,
@@ -39,7 +40,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-type Tab = "dashboard" | "chat" | "models" | "server" | "settings";
+type Tab = "dashboard" | "chat" | "documents" | "models" | "server" | "settings";
 type Health = "online" | "offline";
 type UpdateStatus =
   | { kind: "idle"; message: string }
@@ -97,6 +98,22 @@ type ChatConversation = {
   messages: ChatMessage[];
   created_at: string;
   updated_at: string;
+};
+
+type LocalDocument = {
+  id: string;
+  name: string;
+  source_key: string;
+  character_count: number;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type LocalDocumentUpload = {
+  name: string;
+  content: string;
+  source_key?: string;
 };
 
 type HuggingFaceResult = {
@@ -209,6 +226,7 @@ const CHAT_INPUT_STORAGE_KEY = "deeplocal:chat-input";
 const CHAT_SHOW_CONVERSATIONS_STORAGE_KEY = "deeplocal:chat-show-conversations";
 const CHAT_STREAMING_STORAGE_KEY = "deeplocal:chat-streaming";
 const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
+const CHAT_USE_DOCUMENTS_STORAGE_KEY = "deeplocal:chat-use-documents";
 const CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY = "deeplocal:chat-suggestion-language";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
@@ -264,7 +282,7 @@ function writeStringStorage(key: string, value: string) {
 }
 
 function isTab(value: unknown): value is Tab {
-  return value === "dashboard" || value === "chat" || value === "models" || value === "server" || value === "settings";
+  return value === "dashboard" || value === "chat" || value === "documents" || value === "models" || value === "server" || value === "settings";
 }
 
 function readStoredTab(): Tab {
@@ -485,6 +503,7 @@ export function App() {
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [loaded, setLoaded] = useState<LoadedModel[]>([]);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]);
+  const [documents, setDocuments] = useState<LocalDocument[]>([]);
   const [modelsDirectory, setModelsDirectory] = useState("./models");
   const [hfToken, setHfToken] = useState(() => window.localStorage.getItem("deeplocal:hf-token") ?? "");
   const [suggestionLanguage, setSuggestionLanguage] = useState(() => readStringStorage(CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY, "English"));
@@ -593,12 +612,13 @@ export function App() {
     }
 
     try {
-      const [hardwareRes, modelsRes, loadedRes, downloadsRes, directoryRes] = await Promise.all([
+      const [hardwareRes, modelsRes, loadedRes, downloadsRes, directoryRes, documentsRes] = await Promise.all([
         fetch(`${API_BASE}/runtime/hardware`),
         fetch(`${API_BASE}/runtime/models`),
         fetch(`${API_BASE}/runtime/models/loaded`),
         fetch(`${API_BASE}/runtime/downloads`),
         fetch(`${API_BASE}/runtime/models/directory`),
+        fetch(`${API_BASE}/runtime/documents`),
       ]);
       if (hardwareRes.ok) setHardware(await hardwareRes.json());
       if (modelsRes.ok) setModels(await modelsRes.json());
@@ -608,11 +628,13 @@ export function App() {
         const data = await directoryRes.json();
         setModelsDirectory(data.path);
       }
+      if (documentsRes.ok) setDocuments(await documentsRes.json());
     } catch {
       setHardware(null);
       setModels([]);
       setLoaded([]);
       setDownloads([]);
+      setDocuments([]);
     }
   }, []);
 
@@ -626,6 +648,7 @@ export function App() {
     () => [
       { id: "dashboard" as const, label: "Dashboard", icon: Activity },
       { id: "chat" as const, label: "Chat", icon: MessageSquare },
+      { id: "documents" as const, label: "Documents", icon: FileText },
       { id: "models" as const, label: "Models", icon: Download },
       { id: "server" as const, label: "Server", icon: Server },
       { id: "settings" as const, label: "Settings", icon: Settings },
@@ -709,9 +732,18 @@ export function App() {
             loaded={loaded}
             loadOptionsForModel={loadOptionsForModel}
             suggestionLanguage={suggestionLanguage}
+            documentCount={documents.length}
             onOpenModels={() => selectTab("models")}
             onNotice={(message) => updateNotice("chat", message)}
             onRefresh={refresh}
+          />
+        </RetainedPage>
+        <RetainedPage active={tab === "documents"}>
+          <Documents
+            documents={documents}
+            onNotice={(message) => updateNotice("documents", message)}
+            onRefresh={refresh}
+            onOpenChat={() => selectTab("chat")}
           />
         </RetainedPage>
         <RetainedPage active={tab === "models"}>
@@ -822,6 +854,7 @@ function Chat({
   loaded,
   loadOptionsForModel,
   suggestionLanguage,
+  documentCount,
   onOpenModels,
   onNotice,
   onRefresh,
@@ -830,6 +863,7 @@ function Chat({
   loaded: LoadedModel[];
   loadOptionsForModel: (modelId: string) => ModelLoadOptions;
   suggestionLanguage: string;
+  documentCount: number;
   onOpenModels: () => void;
   onNotice: (message: string) => void;
   onRefresh: () => Promise<void>;
@@ -839,6 +873,7 @@ function Chat({
   const [activeConversationId, setActiveConversationId] = useState(() => readStringStorage(ACTIVE_CHAT_STORAGE_KEY));
   const [showConversationList, setShowConversationList] = useState(() => readJsonStorage(CHAT_SHOW_CONVERSATIONS_STORAGE_KEY, false));
   const [streaming, setStreaming] = useState(() => readJsonStorage(CHAT_STREAMING_STORAGE_KEY, true));
+  const [useDocuments, setUseDocuments] = useState(() => readJsonStorage(CHAT_USE_DOCUMENTS_STORAGE_KEY, true));
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState(() => readStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY));
   const [isSuggesting, setIsSuggesting] = useState(false);
@@ -902,6 +937,10 @@ function Chat({
   useEffect(() => {
     writeJsonStorage(CHAT_STREAMING_STORAGE_KEY, streaming);
   }, [streaming]);
+
+  useEffect(() => {
+    writeJsonStorage(CHAT_USE_DOCUMENTS_STORAGE_KEY, useDocuments);
+  }, [useDocuments]);
 
   useEffect(() => {
     writeStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY, selectedModelId);
@@ -993,6 +1032,7 @@ function Chat({
             requestMessages,
             controller.signal,
             generationOptions,
+            useDocuments,
             (token) => {
               content += token;
               updateConversationMessages(conversation.id, [...nextMessages, { ...assistantDraft, content }], modelId);
@@ -1036,6 +1076,7 @@ function Chat({
           model: modelId,
           stream: false,
           ...generationOptions,
+          use_documents: useDocuments,
           messages: requestMessages,
         }),
       });
@@ -1376,6 +1417,15 @@ function Chat({
             <input type="checkbox" checked={streaming} disabled={isGenerating} onChange={(event) => setStreaming(event.target.checked)} />
             <span>Streaming</span>
           </label>
+          <label className="streamToggle documentToggle" title={documentCount ? "Use indexed local documents" : "Add documents to enable local document context"}>
+            <input
+              type="checkbox"
+              checked={useDocuments}
+              disabled={isGenerating || documentCount === 0}
+              onChange={(event) => setUseDocuments(event.target.checked)}
+            />
+            <span>Documents{documentCount ? ` (${documentCount})` : ""}</span>
+          </label>
           <button className="promptIdeaButton" type="button" title="Suggest a question" aria-label="Suggest a question" disabled={isGenerating || isSuggesting || loadingModelId !== null} aria-busy={isSuggesting} onClick={suggestPrompt}>
             {isSuggesting ? <LoaderCircle size={16} className="accessSpinner" /> : <Sparkles size={16} />}
             {isSuggesting ? "Thinking" : "Suggest"}
@@ -1448,6 +1498,188 @@ function Chat({
       ),
     );
   }
+}
+
+function Documents({
+  documents,
+  onNotice,
+  onRefresh,
+  onOpenChat,
+}: {
+  documents: LocalDocument[];
+  onNotice: (message: string) => void;
+  onRefresh: () => Promise<void>;
+  onOpenChat: () => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [removingDocument, setRemovingDocument] = useState<LocalDocument | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+
+  async function ingestDocument(upload: LocalDocumentUpload) {
+    const response = await fetch(`${API_BASE}/runtime/documents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(upload),
+    });
+    if (!response.ok) throw new Error((await response.text()) || `Could not index ${upload.name}.`);
+  }
+
+  async function ingestUploads(uploads: LocalDocumentUpload[]) {
+    if (!uploads.length || isIngesting) return;
+    setIsIngesting(true);
+    try {
+      const failures: string[] = [];
+      let indexed = 0;
+      for (const upload of uploads) {
+        try {
+          await ingestDocument(upload);
+          indexed += 1;
+        } catch (error) {
+          failures.push(error instanceof Error ? error.message : `Could not index ${upload.name}.`);
+        }
+      }
+      await onRefresh();
+      if (failures.length) {
+        onNotice(indexed ? `Indexed ${indexed} document${indexed === 1 ? "" : "s"}. ${failures[0]}` : failures[0]);
+      } else {
+        onNotice(`Indexed ${indexed} local document${indexed === 1 ? "" : "s"}.`);
+      }
+    } finally {
+      setIsIngesting(false);
+    }
+  }
+
+  async function chooseDocuments() {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      fileInputRef.current?.click();
+      return;
+    }
+    const selected = await open({
+      title: "Add local documents",
+      multiple: true,
+      directory: false,
+      filters: [
+        {
+          name: "Text documents",
+          extensions: ["txt", "md", "markdown", "rst", "csv", "json", "yaml", "yml", "html", "htm", "log"],
+        },
+      ],
+    });
+    const paths = typeof selected === "string" ? [selected] : selected ?? [];
+    if (!paths.length) return;
+    const uploads: LocalDocumentUpload[] = [];
+    for (const path of paths) {
+      try {
+        uploads.push(await invoke<LocalDocumentUpload>("read_local_document", { path }));
+      } catch (error) {
+        onNotice(error instanceof Error ? error.message : "Could not read the selected document.");
+      }
+    }
+    await ingestUploads(uploads);
+  }
+
+  async function handleBrowserSelection(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!files.length) return;
+    const uploads: LocalDocumentUpload[] = [];
+    for (const file of files) {
+      if (file.size > 8 * 1024 * 1024) {
+        onNotice(`${file.name} is larger than the 8 MB local indexing limit.`);
+        continue;
+      }
+      uploads.push({ name: file.name, content: await readBrowserDocument(file), source_key: `browser:${file.name}` });
+    }
+    await ingestUploads(uploads);
+  }
+
+  async function removeDocument(document: LocalDocument) {
+    setIsRemoving(true);
+    try {
+      const response = await fetch(`${API_BASE}/runtime/documents/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: document.id }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || "Could not remove the document from the local index.");
+      setRemovingDocument(null);
+      await onRefresh();
+      onNotice(`Removed ${document.name} from the local index.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not remove the document from the local index.");
+    } finally {
+      setIsRemoving(false);
+    }
+  }
+
+  return (
+    <div className="pane documentsPane">
+      <div className="paneHeader">
+        <div>
+          <h2>Local documents</h2>
+          <p>{documents.length} indexed</p>
+        </div>
+        <button onClick={chooseDocuments} disabled={isIngesting}>
+          {isIngesting ? <LoaderCircle size={16} className="accessSpinner" /> : <Plus size={16} />}
+          {isIngesting ? "Indexing" : "Add documents"}
+        </button>
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".txt,.md,.markdown,.rst,.csv,.json,.yaml,.yml,.html,.htm,.log,text/plain,text/markdown,text/csv,application/json"
+        multiple
+        hidden
+        onChange={handleBrowserSelection}
+      />
+      {documents.length ? (
+        <div className="documentList">
+          {documents.map((document) => (
+            <article className="documentRow" key={document.id}>
+              <div className="documentIcon" aria-hidden="true">
+                <FileText size={20} />
+              </div>
+              <div className="documentInfo">
+                <strong>{document.name}</strong>
+                <span>{document.chunk_count} chunks · {formatDocumentCharacters(document.character_count)}</span>
+              </div>
+              <div className="documentActions">
+                <button className="secondaryAction" onClick={onOpenChat}>
+                  <MessageSquare size={15} />
+                  Chat
+                </button>
+                <button className="dangerAction" onClick={() => setRemovingDocument(document)}>
+                  <Trash2 size={15} />
+                  Remove
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={<FileText size={24} />}
+          title="No documents indexed"
+          description="Add a local text document to make it available to chat."
+          actionLabel="Add documents"
+          onAction={chooseDocuments}
+        />
+      )}
+      {removingDocument && (
+        <ConfirmationDialog
+          title="Remove from local index"
+          message={`Remove "${removingDocument.name}"?`}
+          detail="The original file stays where it is."
+          confirmLabel="Remove"
+          destructive
+          busy={isRemoving}
+          onCancel={() => setRemovingDocument(null)}
+          onConfirm={() => removeDocument(removingDocument)}
+        />
+      )}
+    </div>
+  );
 }
 
 function Models({
@@ -3079,6 +3311,20 @@ function formatFileSize(bytes?: number | null) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function formatDocumentCharacters(characters: number) {
+  return `${new Intl.NumberFormat().format(characters)} characters`;
+}
+
+function readBrowserDocument(file: File): Promise<string> {
+  if (typeof file.text === "function") return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsText(file);
+  });
+}
+
 function formatTransferredSize(bytes: number) {
   if (!bytes) return "0 MB";
   return formatFileSize(bytes);
@@ -3354,6 +3600,7 @@ async function streamChatCompletion(
   messages: OpenAiRequestMessage[],
   signal: AbortSignal,
   generationOptions: ChatGenerationOptions,
+  useDocuments: boolean,
   onToken: (token: string) => void,
 ) {
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -3364,6 +3611,7 @@ async function streamChatCompletion(
       model,
       stream: true,
       ...generationOptions,
+      use_documents: useDocuments,
       messages,
     }),
   });
@@ -3436,6 +3684,7 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
       top_p: 0.95,
       max_tokens: 64,
       stop: ["\n"],
+      use_documents: false,
       messages: buildPromptSuggestionMessages(messages, currentDraft, language),
     }),
   });

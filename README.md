@@ -16,6 +16,7 @@ model files to a remote service.
 - Store downloaded models under `./models/`.
 - Load local GGUF models through `llama.cpp`.
 - Chat with loaded models in the browser UI.
+- Index local text documents and retrieve relevant excerpts during chat.
 - Render Markdown responses in chat.
 - Expose an OpenAI-compatible local API at `http://127.0.0.1:14567/v1` in development.
 - Keep Hugging Face tokens local to your machine.
@@ -127,6 +128,32 @@ enabled:
 
 Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
 `llama.cpp` after cleaning local project artifacts.
+
+## Document Chat
+
+Open **Documents** and add local `.txt`, `.md`, `.markdown`, `.rst`, `.csv`,
+`.json`, `.yaml`, `.yml`, `.html`, `.htm`, or `.log` files. deepLocal chunks
+the readable text, creates deterministic local vectors, and stores both the
+chunks and vectors in its local SQLite database. No document content or
+embeddings are sent to a remote service.
+
+In **Chat**, the **Documents** control is enabled when the local index contains
+files. When enabled, deepLocal retrieves the most relevant excerpts for each
+question before sending it to the loaded model. Turn that control off for a
+normal model-only chat. Removing an item from **Documents** removes its local
+index entries but never deletes the original file.
+
+The local runtime also exposes document endpoints for integrations:
+
+```text
+GET  /runtime/documents
+POST /runtime/documents
+POST /runtime/documents/search
+POST /runtime/documents/delete
+```
+
+`POST /v1/chat/completions` uses indexed documents by default. Set
+`"use_documents": false` in a request to disable retrieval for that completion.
 
 ## Packaging A macOS App
 

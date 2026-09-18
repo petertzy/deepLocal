@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use deeplocal_core::{
-    ChatMessage, ChatRole, ChatSession, DownloadJob, GenerationParameters, ModelDescriptor,
+    ChatMessage, ChatRole, ChatSession, DocumentChunk, DownloadJob, GenerationParameters,
+    IndexedDocumentChunk, LocalDocument, ModelDescriptor,
 };
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -72,6 +73,25 @@ impl Storage {
                 created_at text not null,
                 updated_at text not null
             );
+            create table if not exists local_documents (
+                id text primary key,
+                name text not null,
+                source_key text not null unique,
+                character_count integer not null,
+                chunk_count integer not null,
+                created_at text not null,
+                updated_at text not null
+            );
+            create table if not exists document_chunks (
+                id text primary key,
+                document_id text not null,
+                chunk_index integer not null,
+                content text not null,
+                embedding blob not null,
+                foreign key(document_id) references local_documents(id) on delete cascade
+            );
+            create index if not exists idx_document_chunks_document_id
+                on document_chunks(document_id, chunk_index);
             ",
         )?;
         Ok(())
@@ -252,6 +272,120 @@ impl Storage {
         Ok(messages)
     }
 
+    pub fn replace_document(
+        &self,
+        document: &LocalDocument,
+        chunks: &[DocumentChunk],
+    ) -> anyhow::Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
+            "delete from document_chunks where document_id in (select id from local_documents where source_key = ?1)",
+            params![document.source_key],
+        )?;
+        transaction.execute(
+            "delete from local_documents where source_key = ?1",
+            params![document.source_key],
+        )?;
+        transaction.execute(
+            "insert into local_documents (
+                id, name, source_key, character_count, chunk_count, created_at, updated_at
+             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                document.id.to_string(),
+                document.name,
+                document.source_key,
+                document.character_count,
+                document.chunk_count,
+                document.created_at.to_rfc3339(),
+                document.updated_at.to_rfc3339(),
+            ],
+        )?;
+
+        for chunk in chunks {
+            transaction.execute(
+                "insert into document_chunks (id, document_id, chunk_index, content, embedding)
+                 values (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    chunk.id.to_string(),
+                    chunk.document_id.to_string(),
+                    chunk.chunk_index,
+                    chunk.content,
+                    encode_embedding(&chunk.embedding),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_documents(&self) -> anyhow::Result<Vec<LocalDocument>> {
+        let mut statement = self.conn.prepare(
+            "select id, name, source_key, character_count, chunk_count, created_at, updated_at
+             from local_documents order by updated_at desc",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(LocalDocument {
+                id: parse_uuid(row.get::<_, String>(0)?)?,
+                name: row.get(1)?,
+                source_key: row.get(2)?,
+                character_count: row.get(3)?,
+                chunk_count: row.get(4)?,
+                created_at: parse_datetime(row.get::<_, String>(5)?)?,
+                updated_at: parse_datetime(row.get::<_, String>(6)?)?,
+            })
+        })?;
+
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(row?);
+        }
+        Ok(documents)
+    }
+
+    pub fn delete_document(&self, id: Uuid) -> anyhow::Result<bool> {
+        self.conn.execute(
+            "delete from document_chunks where document_id = ?1",
+            params![id.to_string()],
+        )?;
+        Ok(self.conn.execute(
+            "delete from local_documents where id = ?1",
+            params![id.to_string()],
+        )? > 0)
+    }
+
+    pub fn list_indexed_document_chunks(&self) -> anyhow::Result<Vec<IndexedDocumentChunk>> {
+        let mut statement = self.conn.prepare(
+            "select chunks.id, chunks.document_id, documents.name, chunks.chunk_index, chunks.content, chunks.embedding
+             from document_chunks chunks
+             join local_documents documents on documents.id = chunks.document_id
+             order by documents.updated_at desc, chunks.chunk_index asc",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, u32>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+            ))
+        })?;
+
+        let mut chunks = Vec::new();
+        for row in rows {
+            let (id, document_id, document_name, chunk_index, content, embedding) = row?;
+            chunks.push(IndexedDocumentChunk {
+                id: parse_uuid(id)?,
+                document_id: parse_uuid(document_id)?,
+                document_name,
+                chunk_index,
+                content,
+                embedding: decode_embedding(&embedding)?,
+            });
+        }
+        Ok(chunks)
+    }
+
     pub fn upsert_download_job(&self, job: &DownloadJob) -> anyhow::Result<()> {
         self.conn.execute(
             "insert into download_jobs (
@@ -358,4 +492,22 @@ fn parse_datetime(value: String) -> rusqlite::Result<DateTime<Utc>> {
                 Box::new(error),
             )
         })
+}
+
+fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(embedding.len() * std::mem::size_of::<f32>());
+    for value in embedding {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn decode_embedding(bytes: &[u8]) -> anyhow::Result<Vec<f32>> {
+    if bytes.len() % std::mem::size_of::<f32>() != 0 {
+        anyhow::bail!("stored document embedding has an invalid length");
+    }
+    Ok(bytes
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect())
 }
