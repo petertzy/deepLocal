@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use deeplocal_core::{
     ChatMessage, ChatRole, ChatSession, DocumentChunk, DownloadJob, GenerationParameters,
-    IndexedDocumentChunk, LocalDocument, ModelDescriptor,
+    IndexedDocumentChunk, LocalDocument, ModelDescriptor, PromptPreset,
 };
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -49,6 +49,14 @@ impl Storage {
                 content text not null,
                 metadata_json text not null,
                 created_at text not null
+            );
+            create table if not exists prompt_presets (
+                id text primary key,
+                name text not null,
+                system_prompt text,
+                prompt_template text,
+                created_at text not null,
+                updated_at text not null
             );
             create table if not exists benchmarks (
                 id text primary key,
@@ -223,6 +231,49 @@ impl Storage {
             params![id.to_string()],
         )?;
         Ok(())
+    }
+
+    pub fn upsert_prompt_preset(&self, preset: &PromptPreset) -> anyhow::Result<()> {
+        self.conn.execute(
+            "insert into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at)
+             values (?1, ?2, ?3, ?4, ?5, ?6)
+             on conflict(id) do update set name = excluded.name, system_prompt = excluded.system_prompt,
+                prompt_template = excluded.prompt_template, updated_at = excluded.updated_at",
+            params![
+                preset.id.to_string(),
+                preset.name,
+                preset.system_prompt,
+                preset.prompt_template,
+                preset.created_at.to_rfc3339(),
+                preset.updated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_prompt_presets(&self) -> anyhow::Result<Vec<PromptPreset>> {
+        let mut stmt = self.conn.prepare(
+            "select id, name, system_prompt, prompt_template, created_at, updated_at
+             from prompt_presets order by name collate nocase, created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PromptPreset {
+                id: parse_uuid(row.get::<_, String>(0)?)?,
+                name: row.get(1)?,
+                system_prompt: row.get(2)?,
+                prompt_template: row.get(3)?,
+                created_at: parse_datetime(row.get::<_, String>(4)?)?,
+                updated_at: parse_datetime(row.get::<_, String>(5)?)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn delete_prompt_preset(&self, id: Uuid) -> anyhow::Result<bool> {
+        Ok(self.conn.execute(
+            "delete from prompt_presets where id = ?1",
+            params![id.to_string()],
+        )? > 0)
     }
 
     pub fn append_chat_message(

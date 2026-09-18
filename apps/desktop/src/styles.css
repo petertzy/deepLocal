@@ -1236,6 +1236,30 @@ progress {
   text-overflow: ellipsis;
 }
 
+.chatPresetPicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: min(100%, 420px);
+  color: #66727a;
+}
+
+.chatPresetPicker select {
+  width: min(100%, 290px);
+  min-height: 30px;
+  padding: 0 26px 0 8px;
+  border-color: #dde2e4;
+  color: #445057;
+  font-size: 13px;
+}
+
+.insertPromptTemplate {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .chatActions {
   display: flex;
   gap: 8px;
@@ -1638,6 +1662,112 @@ label {
   box-shadow: 0 18px 44px rgba(23, 32, 38, 0.22);
 }
 
+.promptPresetDialog {
+  width: min(760px, 100%);
+  max-height: min(88vh, 820px);
+  overflow: auto;
+}
+
+.promptPresetDialog .dialogHeader {
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+}
+
+.promptPresetClose {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.promptPresetManager {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.2fr);
+  gap: 18px;
+  min-height: 0;
+}
+
+.promptPresetList,
+.promptPresetForm {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.promptPresetListHeader,
+.promptPresetItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.promptPresetListHeader {
+  justify-content: space-between;
+  min-height: 38px;
+}
+
+.promptPresetListHeader button {
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.promptPresetItem {
+  padding: 8px 0;
+  border-bottom: 1px solid #edf0f1;
+}
+
+.promptPresetItem > div {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.promptPresetItem strong {
+  overflow-wrap: anywhere;
+}
+
+.promptPresetItem small,
+.promptPresetEmpty {
+  color: #66727a;
+  font-size: 12px;
+}
+
+.promptPresetItem .iconButton {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.promptPresetForm h3 {
+  font-size: 15px;
+}
+
+.promptPresetForm label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.promptPresetForm label span {
+  color: #53636c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.promptPresetForm textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.promptPresetForm .dialogActions {
+  margin-top: 2px;
+}
+
 .dialogHeader {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
@@ -1944,6 +2074,10 @@ label {
     width: 100%;
   }
 
+  .promptPresetManager {
+    grid-template-columns: 1fr;
+  }
+
   .dialogActions {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1983,6 +2117,7 @@ label {
   .sortControl,
   .downloadActions,
   .chatModelPicker,
+  .chatPresetPicker,
   .emptyState {
     grid-template-columns: 1fr;
   }

@@ -100,6 +100,15 @@ type ChatConversation = {
   updated_at: string;
 };
 
+type PromptPreset = {
+  id: string;
+  name: string;
+  system_prompt: string | null;
+  prompt_template: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type LocalDocument = {
   id: string;
   name: string;
@@ -228,6 +237,7 @@ const CHAT_STREAMING_STORAGE_KEY = "deeplocal:chat-streaming";
 const CHAT_SELECTED_MODEL_STORAGE_KEY = "deeplocal:chat-selected-model";
 const CHAT_USE_DOCUMENTS_STORAGE_KEY = "deeplocal:chat-use-documents";
 const CHAT_SUGGESTION_LANGUAGE_STORAGE_KEY = "deeplocal:chat-suggestion-language";
+const CHAT_PROMPT_PRESET_STORAGE_KEY = "deeplocal:chat-prompt-preset";
 const MODEL_LOAD_OPTIONS_STORAGE_KEY = "deeplocal:model-load-options";
 const MODELS_UI_STORAGE_KEY = "deeplocal:models-ui";
 const SETTINGS_UI_STORAGE_KEY = "deeplocal:settings-ui";
@@ -876,6 +886,15 @@ function Chat({
   const [useDocuments, setUseDocuments] = useState(() => readJsonStorage(CHAT_USE_DOCUMENTS_STORAGE_KEY, true));
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState(() => readStringStorage(CHAT_SELECTED_MODEL_STORAGE_KEY));
+  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
+  const [selectedPromptPresetId, setSelectedPromptPresetId] = useState(() => readStringStorage(CHAT_PROMPT_PRESET_STORAGE_KEY));
+  const [promptPresetManagerOpen, setPromptPresetManagerOpen] = useState(false);
+  const [editingPromptPreset, setEditingPromptPreset] = useState<PromptPreset | null>(null);
+  const [promptPresetName, setPromptPresetName] = useState("");
+  const [promptPresetSystemPrompt, setPromptPresetSystemPrompt] = useState("");
+  const [promptPresetTemplate, setPromptPresetTemplate] = useState("");
+  const [savingPromptPreset, setSavingPromptPreset] = useState(false);
+  const [deletingPromptPreset, setDeletingPromptPreset] = useState<PromptPreset | null>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ChatConversation | null>(null);
@@ -904,6 +923,94 @@ function Chat({
     return [{ id: conversationModel, name: conversationModel }, ...selectableModels];
   }, [conversationModel, selectableModels]);
   const messages = activeConversation?.messages ?? [];
+  const selectedPromptPreset = promptPresets.find((preset) => preset.id === selectedPromptPresetId);
+
+  async function refreshPromptPresets() {
+    const res = await fetch(`${API_BASE}/runtime/chat/presets`);
+    if (!res.ok) throw new Error(await res.text());
+    const items = (await res.json()) as PromptPreset[];
+    setPromptPresets(items);
+    if (selectedPromptPresetId && !items.some((preset) => preset.id === selectedPromptPresetId)) {
+      setSelectedPromptPresetId("");
+      window.localStorage.removeItem(CHAT_PROMPT_PRESET_STORAGE_KEY);
+    }
+  }
+
+  useEffect(() => {
+    void refreshPromptPresets().catch((error) => onNotice(error instanceof Error ? error.message : "Could not load prompt presets."));
+  }, []);
+
+  function selectPromptPreset(id: string) {
+    setSelectedPromptPresetId(id);
+    if (id) window.localStorage.setItem(CHAT_PROMPT_PRESET_STORAGE_KEY, id);
+    else window.localStorage.removeItem(CHAT_PROMPT_PRESET_STORAGE_KEY);
+  }
+
+  function startNewPromptPreset() {
+    setEditingPromptPreset(null);
+    setPromptPresetName("");
+    setPromptPresetSystemPrompt("");
+    setPromptPresetTemplate("");
+  }
+
+  function startEditingPromptPreset(preset: PromptPreset) {
+    setEditingPromptPreset(preset);
+    setPromptPresetName(preset.name);
+    setPromptPresetSystemPrompt(preset.system_prompt ?? "");
+    setPromptPresetTemplate(preset.prompt_template ?? "");
+  }
+
+  async function savePromptPreset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!promptPresetName.trim() || (!promptPresetSystemPrompt.trim() && !promptPresetTemplate.trim())) {
+      onNotice("Add a name and at least a system prompt or a prompt template.");
+      return;
+    }
+    setSavingPromptPreset(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/chat/presets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: editingPromptPreset?.id,
+          name: promptPresetName.trim(),
+          system_prompt: promptPresetSystemPrompt.trim() || null,
+          prompt_template: promptPresetTemplate.trim() || null,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = (await res.json()) as PromptPreset;
+      await refreshPromptPresets();
+      selectPromptPreset(saved.id);
+      startNewPromptPreset();
+      onNotice(`Saved prompt preset “${saved.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not save prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
+
+  async function deletePromptPreset(preset: PromptPreset) {
+    setSavingPromptPreset(true);
+    try {
+      const res = await fetch(`${API_BASE}/runtime/chat/presets/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: preset.id }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      if (selectedPromptPresetId === preset.id) selectPromptPreset("");
+      if (editingPromptPreset?.id === preset.id) startNewPromptPreset();
+      setDeletingPromptPreset(null);
+      await refreshPromptPresets();
+      onNotice(`Deleted prompt preset “${preset.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not delete prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -1008,7 +1115,7 @@ function Chat({
       const nextMessages: ChatMessage[] = [...conversation.messages, userMessage];
       const modelId = conversation.model_id ?? conversationModel;
       const loadOptions = loadOptionsForModel(modelId);
-      const requestMessages = buildChatCompletionMessages(nextMessages, loadOptions);
+      const requestMessages = buildChatCompletionMessages(nextMessages, loadOptions, selectedPromptPreset?.system_prompt);
       const generationOptions = chatGenerationOptions(requestMessages, loadOptions);
       updateConversationMessages(conversation.id, nextMessages, modelId);
 
@@ -1293,9 +1400,10 @@ function Chat({
           </button>
           <div className="chatTitle">
             <h2>{activeConversation?.title ?? "Chat"}</h2>
-            <label className="chatModelPicker" title={conversationModel ?? "No model loaded"}>
+          <label className="chatModelPicker" title={conversationModel ?? "No model loaded"}>
               <Boxes size={16} />
               <select
+                aria-label="Chat model"
                 disabled={isGenerating || loadingModelId !== null || modelOptions.length === 0}
                 value={conversationModel ?? ""}
                 onChange={(event) => selectModel(event.target.value)}
@@ -1311,8 +1419,34 @@ function Chat({
                 )}
               </select>
             </label>
+            <div className="chatPresetPicker" title="Choose a reusable prompt preset">
+              <Sparkles size={15} />
+              <select
+                aria-label="Prompt preset"
+                value={selectedPromptPresetId}
+                onChange={(event) => selectPromptPreset(event.target.value)}
+              >
+                <option value="">Default prompt</option>
+                {promptPresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.name}</option>
+                ))}
+              </select>
+              {selectedPromptPreset?.prompt_template && (
+                <button
+                  type="button"
+                  className="secondaryAction insertPromptTemplate"
+                  title="Insert this template into the chat input"
+                  onClick={() => setInput((current) => current.trim() ? `${current}\n\n${selectedPromptPreset.prompt_template}` : selectedPromptPreset.prompt_template ?? "")}
+                >
+                  Insert template
+                </button>
+              )}
+            </div>
           </div>
           <div className="chatActions">
+            <button className="iconButton" title="Manage prompt presets" aria-label="Manage prompt presets" onClick={() => setPromptPresetManagerOpen(true)}>
+              <Sparkles size={16} />
+            </button>
             <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && setRenameTarget(activeConversation)}>
               <Pencil size={16} />
             </button>
@@ -1465,6 +1599,77 @@ function Chat({
           busy={deletingConversation}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => deleteConversation(deleteTarget)}
+        />
+      )}
+      {promptPresetManagerOpen && (
+        <div className="modalLayer" role="presentation" onMouseDown={() => setPromptPresetManagerOpen(false)}>
+          <section
+            className="appDialog promptPresetDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="prompt-preset-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="dialogHeader">
+              <span className="dialogIcon"><Sparkles size={18} /></span>
+              <div>
+                <h2 id="prompt-preset-title">Prompt presets</h2>
+                <p>Save reusable system instructions and editable prompt templates on this device.</p>
+              </div>
+              <button className="iconButton promptPresetClose" aria-label="Close prompt presets" onClick={() => setPromptPresetManagerOpen(false)}><X size={16} /></button>
+            </div>
+            <div className="promptPresetManager">
+              <div className="promptPresetList">
+                <div className="promptPresetListHeader">
+                  <strong>Saved presets</strong>
+                  <button className="secondaryAction" type="button" onClick={startNewPromptPreset}><Plus size={14} /> New</button>
+                </div>
+                {promptPresets.length ? promptPresets.map((preset) => (
+                  <article className="promptPresetItem" key={preset.id}>
+                    <div>
+                      <strong>{preset.name}</strong>
+                      <small>{[preset.system_prompt && "System prompt", preset.prompt_template && "Template"].filter(Boolean).join(" · ")}</small>
+                    </div>
+                    <button className="iconButton" aria-label={`Edit ${preset.name}`} title="Edit preset" onClick={() => startEditingPromptPreset(preset)}><Pencil size={14} /></button>
+                    <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>
+                  </article>
+                )) : <p className="promptPresetEmpty">No saved presets yet.</p>}
+              </div>
+              <form className="promptPresetForm" onSubmit={savePromptPreset}>
+                <h3>{editingPromptPreset ? "Edit preset" : "New preset"}</h3>
+                <label>
+                  <span>Name</span>
+                  <input autoComplete="off" value={promptPresetName} onChange={(event) => setPromptPresetName(event.target.value)} placeholder="e.g. Code reviewer" />
+                </label>
+                <label>
+                  <span>System prompt</span>
+                  <textarea value={promptPresetSystemPrompt} onChange={(event) => setPromptPresetSystemPrompt(event.target.value)} rows={4} placeholder="Instructions that guide the assistant's responses" />
+                </label>
+                <label>
+                  <span>Prompt template</span>
+                  <textarea value={promptPresetTemplate} onChange={(event) => setPromptPresetTemplate(event.target.value)} rows={3} placeholder="Reusable text to insert into the chat input" />
+                </label>
+                <div className="dialogActions">
+                  <button className="secondaryAction" type="button" onClick={startNewPromptPreset}>Clear</button>
+                  <button disabled={savingPromptPreset || !promptPresetName.trim() || (!promptPresetSystemPrompt.trim() && !promptPresetTemplate.trim())}>
+                    {savingPromptPreset ? "Saving…" : editingPromptPreset ? "Save changes" : "Save preset"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      )}
+      {deletingPromptPreset && (
+        <ConfirmationDialog
+          title="Delete prompt preset"
+          message={`Delete “${deletingPromptPreset.name}”?`}
+          detail="This removes the preset from local storage. Existing conversations are unchanged."
+          confirmLabel="Delete"
+          destructive
+          busy={savingPromptPreset}
+          onCancel={() => setDeletingPromptPreset(null)}
+          onConfirm={() => deletePromptPreset(deletingPromptPreset)}
         />
       )}
     </div>
@@ -3535,8 +3740,11 @@ function estimateMessageTokens(message: OpenAiRequestMessage) {
   return Math.ceil(cjkCount * 1.5 + otherCount * 0.5) + 24;
 }
 
-function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoadOptions): OpenAiRequestMessage[] {
-  const systemMessage: OpenAiRequestMessage = { role: "system", content: CHAT_SYSTEM_PROMPT };
+function buildChatCompletionMessages(messages: ChatMessage[], options: ModelLoadOptions, presetSystemPrompt?: string | null): OpenAiRequestMessage[] {
+  const systemMessage: OpenAiRequestMessage = {
+    role: "system",
+    content: [CHAT_SYSTEM_PROMPT, presetSystemPrompt?.trim()].filter(Boolean).join("\n\n"),
+  };
   const systemTokens = estimateMessageTokens(systemMessage);
   // Reserve response output space: at least 256 tokens, up to CHAT_RESPONSE_MAX_TOKENS, but capped at 30% of context
   const reservedOutput = Math.min(

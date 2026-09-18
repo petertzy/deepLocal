@@ -11,7 +11,7 @@ use axum::{
 use chrono::Utc;
 use deeplocal_core::{
     ChatMessage, ChatRole, DocumentChunk, DownloadJob, GenerationParameters, GenerationRequest,
-    LoadOptions, LoadedModelStatus, LocalDocument, ModelDescriptor, ModelHandle,
+    LoadOptions, LoadedModelStatus, LocalDocument, ModelDescriptor, ModelHandle, PromptPreset,
     RetrievedDocumentChunk, SearchFiltersConfig,
 };
 use deeplocal_runtime::RuntimeManager;
@@ -72,6 +72,22 @@ pub fn router_with_models_directory(
     models_root: PathBuf,
 ) -> Router {
     let storage = open_default_storage();
+    router_with_storage(
+        runtime,
+        enable_cors,
+        initial_search_filters,
+        models_root,
+        storage,
+    )
+}
+
+fn router_with_storage(
+    runtime: RuntimeManager,
+    enable_cors: bool,
+    initial_search_filters: SearchFiltersConfig,
+    models_root: PathBuf,
+    storage: Storage,
+) -> Router {
     let restored_downloads = restore_download_jobs(&storage);
     let router = Router::new()
         .route("/health", get(health))
@@ -122,6 +138,11 @@ pub fn router_with_models_directory(
             "/runtime/chat/conversations/model",
             post(update_chat_conversation_model),
         )
+        .route(
+            "/runtime/chat/presets",
+            get(list_prompt_presets).post(save_prompt_preset),
+        )
+        .route("/runtime/chat/presets/delete", post(delete_prompt_preset))
         .route("/runtime/chat/messages", post(append_chat_message))
         .route("/runtime/documents", get(documents).post(ingest_document))
         .route("/runtime/documents/delete", post(delete_document))
@@ -1184,6 +1205,64 @@ mod tests {
             .await
             .expect("register duplicate model");
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn prompt_preset_api_supports_create_update_list_and_delete() {
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            PathBuf::from("./models"),
+            Storage::open_memory().expect("open in-memory storage"),
+        );
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets",
+                serde_json::json!({
+                    "name": "Code reviewer",
+                    "system_prompt": "Review code carefully.",
+                    "prompt_template": "Review this code: {{code}}"
+                }),
+            ))
+            .await
+            .expect("create prompt preset");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = response_json(response).await;
+        let id = created["id"].as_str().expect("preset id").to_string();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/runtime/chat/presets")
+                    .body(Body::empty())
+                    .expect("build list request"),
+            )
+            .await
+            .expect("list presets");
+        assert_eq!(response_json(response).await.as_array().unwrap().len(), 1);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets",
+                serde_json::json!({ "id": id.clone(), "name": "Careful reviewer", "system_prompt": "Find correctness issues." }),
+            ))
+            .await
+            .expect("update prompt preset");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["name"], "Careful reviewer");
+
+        let response = app
+            .oneshot(json_request(
+                "/runtime/chat/presets/delete",
+                serde_json::json!({ "id": id }),
+            ))
+            .await
+            .expect("delete prompt preset");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -2604,6 +2683,123 @@ async fn update_chat_conversation_model(
     let storage = state.storage.lock().await;
     match storage.update_chat_session_model(body.id, body.model_id) {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SavePromptPresetRequest {
+    id: Option<Uuid>,
+    name: String,
+    system_prompt: Option<String>,
+    prompt_template: Option<String>,
+}
+
+async fn list_prompt_presets(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    match storage.list_prompt_presets() {
+        Ok(presets) => Json(serde_json::json!(presets)).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
+    }
+}
+
+async fn save_prompt_preset(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<SavePromptPresetRequest>,
+) -> impl IntoResponse {
+    let name = body.name.trim();
+    let system_prompt = body.system_prompt.filter(|value| !value.trim().is_empty());
+    let prompt_template = body
+        .prompt_template
+        .filter(|value| !value.trim().is_empty());
+    if name.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Preset name is required.",
+        )
+            .into_response();
+    }
+    if system_prompt.is_none() && prompt_template.is_none() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Add a system prompt or a prompt template.",
+        )
+            .into_response();
+    }
+
+    let storage = state.storage.lock().await;
+    let existing = match storage.list_prompt_presets() {
+        Ok(presets) => presets
+            .into_iter()
+            .find(|preset| Some(preset.id) == body.id),
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
+    };
+    if body.id.is_some() && existing.is_none() {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            "Prompt preset not found.",
+        )
+            .into_response();
+    }
+    let now = Utc::now();
+    let is_new = body.id.is_none();
+    let preset = PromptPreset {
+        id: body.id.unwrap_or_else(Uuid::new_v4),
+        name: name.to_string(),
+        system_prompt: system_prompt.map(|value| value.trim().to_string()),
+        prompt_template: prompt_template.map(|value| value.trim().to_string()),
+        created_at: existing.map(|preset| preset.created_at).unwrap_or(now),
+        updated_at: now,
+    };
+    match storage.upsert_prompt_preset(&preset) {
+        Ok(()) => (
+            if is_new {
+                axum::http::StatusCode::CREATED
+            } else {
+                axum::http::StatusCode::OK
+            },
+            Json(preset),
+        )
+            .into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DeletePromptPresetRequest {
+    id: Uuid,
+}
+
+async fn delete_prompt_preset(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<DeletePromptPresetRequest>,
+) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    match storage.delete_prompt_preset(body.id) {
+        Ok(true) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            axum::http::StatusCode::NOT_FOUND,
+            "Prompt preset not found.",
+        )
+            .into_response(),
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             error.to_string(),

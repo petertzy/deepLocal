@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,6 +46,7 @@ function apiState(options: { models?: unknown[]; loaded?: unknown[]; downloads?:
     "/runtime/models/loaded": options.loaded ?? [],
     "/runtime/downloads": options.downloads ?? [],
     "/runtime/chat/conversations": options.conversations ?? [],
+    "/runtime/chat/presets": [],
     "/runtime/documents": options.documents ?? [],
     "/runtime/models/directory": { path: "/models" },
   };
@@ -256,8 +257,88 @@ describe("core frontend flows", () => {
     render(<App />);
     await navigate("Chat");
 
-    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue(model.id));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue(model.id));
     expect(screen.queryByText("Load a model to start chatting")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("creates and selects a prompt preset and inserts its template", async () => {
+    const state = apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }] }) as Record<string, unknown>;
+    const presets: Record<string, unknown>[] = [];
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/chat/presets" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        const preset = { ...body, id: "preset-review", created_at: "2026-09-18T09:00:00Z", updated_at: "2026-09-18T09:00:00Z" };
+        presets.splice(0, presets.length, preset);
+        return jsonResponse(preset);
+      }
+      if (path === "/runtime/chat/presets") return jsonResponse(presets);
+      return jsonResponse(state[path] ?? []);
+    });
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Manage prompt presets" }));
+    await userEvent.type(screen.getByPlaceholderText("e.g. Code reviewer"), "Code reviewer");
+    await userEvent.type(screen.getByPlaceholderText("Instructions that guide the assistant's responses"), "Review carefully.");
+    fireEvent.change(screen.getByPlaceholderText("Reusable text to insert into the chat input"), { target: { value: "Review this code: {{code}}" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save preset" }));
+
+    expect(await screen.findByRole("option", { name: "Code reviewer" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Prompt preset" })).toHaveValue("preset-review");
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat prompt" }), { target: { value: "" } });
+    await userEvent.click(screen.getByRole("button", { name: "Insert template" }));
+    expect(screen.getByRole("textbox", { name: "Chat prompt" })).toHaveValue("Review this code: {{code}}");
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/runtime/chat/presets"), expect.objectContaining({ method: "POST" }));
+  });
+
+  it("includes the selected system prompt in chat completion requests", async () => {
+    window.localStorage.setItem("deeplocal:chat-streaming", "false");
+    const conversation = {
+      id: "chat-preset-test",
+      title: "Prompt test",
+      model_id: model.id,
+      messages: [],
+      created_at: "2026-09-18T09:00:00Z",
+      updated_at: "2026-09-18T09:00:00Z",
+    };
+    window.localStorage.setItem("deeplocal:active-chat-conversation", conversation.id);
+    const preset = {
+      id: "preset-instructions",
+      name: "Patient tutor",
+      system_prompt: "Explain concepts with a small example.",
+      prompt_template: null,
+      created_at: "2026-09-18T09:00:00Z",
+      updated_at: "2026-09-18T09:00:00Z",
+    };
+    const state = apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }], conversations: [conversation] }) as Record<string, unknown>;
+    let completionRequest: Record<string, unknown> | undefined;
+    let messageCount = 0;
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/chat/presets") return jsonResponse([preset]);
+      if (path === "/runtime/chat/messages" && init?.method === "POST") {
+        const message = JSON.parse(String(init.body)) as { role: string; content: string };
+        messageCount += 1;
+        return jsonResponse({ id: `message-${messageCount}`, ...message, created_at: "2026-09-18T09:00:00Z" });
+      }
+      if (path === "/v1/chat/completions") {
+        completionRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse({ choices: [{ message: { content: "Example answer." } }] });
+      }
+      return jsonResponse(state[path] ?? []);
+    });
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Prompt preset" }), preset.id);
+    fireEvent.change(screen.getByRole("textbox", { name: "Chat prompt" }), { target: { value: "Explain gravity." } });
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(completionRequest).toBeDefined());
+    expect(completionRequest?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "system", content: expect.stringContaining(preset.system_prompt) }),
+    ]));
   });
 });

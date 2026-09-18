@@ -1,5 +1,7 @@
 use chrono::Utc;
-use deeplocal_core::{ChatRole, DocumentChunk, DownloadJob, LocalDocument, ModelDescriptor};
+use deeplocal_core::{
+    ChatRole, DocumentChunk, DownloadJob, LocalDocument, ModelDescriptor, PromptPreset,
+};
 use deeplocal_storage::Storage;
 use uuid::Uuid;
 
@@ -49,6 +51,36 @@ fn manages_chat_sessions_and_messages() {
             .expect("list sessions")
             .is_empty()
     );
+}
+
+#[test]
+fn manages_prompt_presets() {
+    let storage = Storage::open_memory().expect("open storage");
+    let now = Utc::now();
+    let mut preset = PromptPreset {
+        id: Uuid::new_v4(),
+        name: "Code reviewer".to_string(),
+        system_prompt: Some("Review code carefully and explain risks.".to_string()),
+        prompt_template: Some("Review this code:\n{{code}}".to_string()),
+        created_at: now,
+        updated_at: now,
+    };
+
+    storage
+        .upsert_prompt_preset(&preset)
+        .expect("create preset");
+    let presets = storage.list_prompt_presets().expect("list presets");
+    assert_eq!(presets, vec![preset.clone()]);
+
+    preset.name = "Senior code reviewer".to_string();
+    preset.updated_at = Utc::now();
+    storage
+        .upsert_prompt_preset(&preset)
+        .expect("update preset");
+    assert_eq!(storage.list_prompt_presets().unwrap()[0].name, preset.name);
+    assert!(storage.delete_prompt_preset(preset.id).unwrap());
+    assert!(storage.list_prompt_presets().unwrap().is_empty());
+    assert!(!storage.delete_prompt_preset(preset.id).unwrap());
 }
 
 #[test]
