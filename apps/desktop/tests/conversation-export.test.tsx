@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { serializeConversationJson, serializeConversationMarkdown, type ExportChatConversation } from "../src/chat/conversation-export";
 
 const conversation: ExportChatConversation = {
@@ -69,5 +69,22 @@ describe("conversation export serializers", () => {
 
     expect(json.conversation.messages).toEqual([{ role: "assistant", content: "Hello" }]);
     expect(serializeConversationMarkdown(minimal)).toContain("Hello");
+  });
+
+  it("preserves Unicode and multiline message content", () => {
+    const content = `Hello, 世界 👋
+Markdown: **bold** & <tag> "quoted"`;
+
+    const edgeCase: ExportChatConversation = {
+      ...conversation,
+      messages: [{ role: "user", content }],
+    };
+
+    const json = JSON.parse(serializeConversationJson(edgeCase));
+    expect(json.conversation.messages[0].content).toBe(content);
+
+    const markdown = serializeConversationMarkdown(edgeCase);
+    expect(markdown).toContain("Hello, 世界 👋");
+    expect(markdown).toContain('"quoted"');
   });
 });
