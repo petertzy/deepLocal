@@ -9,6 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
 import remarkGfm from "remark-gfm";
+import { serializeConversationJson, serializeConversationMarkdown } from "./chat/conversation-export";
 import { DefaultHighestPriorityPrompt, type HighestPriorityPrompt } from "./prompts";
 import {
   Activity,
@@ -1318,6 +1319,29 @@ function Chat({
     }
   }
 
+  function exportActiveConversation(format: "markdown" | "json") {
+    if (!activeConversation) return;
+
+    const content = format === "markdown"
+      ? serializeConversationMarkdown(activeConversation)
+      : serializeConversationJson(activeConversation);
+    const extension = format === "markdown" ? "md" : "json";
+    const safeTitle = activeConversation.title
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, "-")
+      .trim()
+      .replace(/[. ]+$/g, "") || "conversation";
+    const blob = new Blob([content], {
+      type: format === "markdown" ? "text/markdown;charset=utf-8" : "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${safeTitle}.${extension}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   async function createConversation(title = "New conversation", modelId = selectedModelId || activeModel || null) {
     const res = await fetch(`${API_BASE}/runtime/chat/conversations`, {
       method: "POST",
@@ -1472,7 +1496,12 @@ function Chat({
             <button className="iconButton" title="Manage prompt presets" aria-label="Manage prompt presets" onClick={() => setPromptPresetManagerOpen(true)}>
               <Sparkles size={16} />
             </button>
-            <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && setRenameTarget(activeConversation)}>
+            <button className="iconButton" disabled={!activeConversation} title="Export conversation as Markdown" aria-label="Export conversation as Markdown" onClick={() => exportActiveConversation("markdown")}>
+              <FileText size={16} />
+            </button>
+            <button className="iconButton" disabled={!activeConversation} title="Export conversation as JSON" aria-label="Export conversation as JSON" onClick={() => exportActiveConversation("json")}>
+              <Download size={16} />
+            </button>            <button className="iconButton" disabled={!activeConversation} title="Rename conversation" onClick={() => activeConversation && setRenameTarget(activeConversation)}>
               <Pencil size={16} />
             </button>
             <button className="iconButton" disabled={!activeConversation} title="Delete conversation" onClick={() => activeConversation && setDeleteTarget(activeConversation)}>
