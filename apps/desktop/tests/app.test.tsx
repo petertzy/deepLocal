@@ -289,6 +289,35 @@ describe("core frontend flows", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("exports the active conversation with a sanitized filename in both formats", async () => {
+    const conversation = {
+      id: "conversation-export-test",
+      title: "Research / notes",
+      model_id: model.id,
+      messages: [{ id: "message-1", role: "user" as const, content: "Keep this message.", created_at: "2026-10-12T10:00:00Z" }],
+      created_at: "2026-10-12T10:00:00Z",
+      updated_at: "2026-10-12T10:00:00Z",
+    };
+    window.localStorage.setItem("deeplocal:active-chat-conversation", conversation.id);
+    installFetch(apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }], conversations: [conversation] }));
+    render(<App />);
+    await navigate("Chat");
+
+    const downloadedFilenames: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFilenames.push(this.download);
+    });
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:conversation-export"), revokeObjectURL: vi.fn() });
+
+    await userEvent.click(screen.getByRole("button", { name: "Export conversation as Markdown" }));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(downloadedFilenames).toEqual(["Research - notes.md"]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Export conversation as JSON" }));
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(downloadedFilenames).toEqual(["Research - notes.md", "Research - notes.json"]);
+  });
+
   it("creates and selects a prompt preset and inserts its template", async () => {
     const state = apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }] }) as Record<string, unknown>;
     const presets: Record<string, unknown>[] = [];
