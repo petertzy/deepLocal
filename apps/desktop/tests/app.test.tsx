@@ -294,31 +294,115 @@ describe("core frontend flows", () => {
       id: "conversation-export-test",
       title: "Research / notes",
       model_id: model.id,
-      messages: [{ id: "message-1", role: "user" as const, content: "Keep this message.", created_at: "2026-10-12T10:00:00Z" }],
+      messages: [
+        {
+          id: "message-1",
+          role: "user" as const,
+          content: "Keep this message.",
+          created_at: "2026-10-12T10:00:00Z",
+        },
+      ],
       created_at: "2026-10-12T10:00:00Z",
       updated_at: "2026-10-12T10:00:00Z",
     };
-    window.localStorage.setItem("deeplocal:active-chat-conversation", conversation.id);
-    installFetch(apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }], conversations: [conversation] }));
+
+    window.localStorage.setItem(
+      "deeplocal:active-chat-conversation",
+      conversation.id,
+    );
+
+    installFetch(
+      apiState({
+        models: [model],
+        loaded: [
+          { id: model.id, backend: "mock", status: "loaded" },
+        ],
+        conversations: [conversation],
+      }),
+    );
+
     render(<App />);
     await navigate("Chat");
 
     const downloadedFilenames: string[] = [];
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      downloadedFilenames.push(this.download);
+
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        downloadedFilenames.push(this.download);
+      });
+
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:conversation-export-md")
+      .mockReturnValueOnce("blob:conversation-export-json");
+
+    const revokeObjectURL = vi.fn();
+
+    vi.stubGlobal("URL", {
+      createObjectURL,
+      revokeObjectURL,
     });
-    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:conversation-export"), revokeObjectURL: vi.fn() });
 
-    await userEvent.click(screen.getByRole("button", { name: "Export conversation as Markdown" }));
-    expect(click).toHaveBeenCalledTimes(1);
-    expect(downloadedFilenames).toEqual(["Research - notes.md"]);
+    const originalSetTimeout = window.setTimeout;
+    const cleanupCallbacks: Array<() => void> = [];
 
-    await userEvent.click(screen.getByRole("button", { name: "Export conversation as JSON" }));
-    expect(click).toHaveBeenCalledTimes(2);
-    expect(downloadedFilenames).toEqual(["Research - notes.md", "Research - notes.json"]);
+    const timeoutSpy = vi
+      .spyOn(window, "setTimeout")
+      .mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (timeout === 1000 && typeof handler === "function") {
+          cleanupCallbacks.push(() => handler(...args));
+          return 0;
+        }
 
-    // Keep the URL stub active until both scheduled cleanup callbacks have run.
-    await new Promise((resolve) => window.setTimeout(resolve, 1100));
+        return originalSetTimeout(handler, timeout, ...args);
+      }) as typeof window.setTimeout);
+
+    try {
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Export conversation as Markdown",
+        }),
+      );
+
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(downloadedFilenames).toEqual([
+        "Research - notes.md",
+      ]);
+
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Export conversation as JSON",
+        }),
+      );
+
+      expect(click).toHaveBeenCalledTimes(2);
+      expect(downloadedFilenames).toEqual([
+        "Research - notes.md",
+        "Research - notes.json",
+      ]);
+
+      expect(createObjectURL).toHaveBeenCalledTimes(2);
+      expect(cleanupCallbacks).toHaveLength(2);
+
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+
+      cleanupCallbacks.forEach((callback) => callback());
+
+      expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+
+      expect(revokeObjectURL).toHaveBeenNthCalledWith(
+        1,
+        "blob:conversation-export-md",
+      );
+
+      expect(revokeObjectURL).toHaveBeenNthCalledWith(
+        2,
+        "blob:conversation-export-json",
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("creates and selects a prompt preset and inserts its template", async () => {
