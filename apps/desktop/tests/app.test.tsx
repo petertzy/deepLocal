@@ -89,6 +89,129 @@ afterEach(() => {
 });
 
 describe("core frontend flows", () => {
+  it("filters saved conversations by title without changing the active conversation", async () => {
+    const state = apiState({
+      conversations: [
+        {
+          id: "search-title-1",
+          title: "Kubernetes Notes",
+          model_id: "test-model",
+          messages: [{ id: "m1", role: "user", content: "Cluster configuration", created_at: "2026-10-01T10:00:00Z" }],
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T10:00:00Z",
+        },
+        {
+          id: "search-title-2",
+          title: "Python Basics",
+          model_id: "test-model",
+          messages: [{ id: "m2", role: "user", content: "Variables and loops", created_at: "2026-10-02T10:00:00Z" }],
+          created_at: "2026-10-02T10:00:00Z",
+          updated_at: "2026-10-02T10:00:00Z",
+        },
+      ],
+    });
+    installFetch(state as Record<string, unknown>);
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(await screen.findByRole("button", { name: "Show conversations" }));
+
+    const search = screen.getByRole("searchbox", { name: "Search conversations" });
+    await userEvent.type(search, "kUbErNeTeS");
+
+    expect(screen.getByRole("button", { name: /Kubernetes Notes/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Python Basics/ })).not.toBeInTheDocument();
+  });
+
+  it("filters saved conversations by message content", async () => {
+    const state = apiState({
+      conversations: [
+        {
+          id: "search-message-1",
+          title: "Work Notes",
+          model_id: "test-model",
+          messages: [{ id: "m1", role: "user", content: "Remember the unusual word QUASARSTONE", created_at: "2026-10-01T10:00:00Z" }],
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T10:00:00Z",
+        },
+        {
+          id: "search-message-2",
+          title: "Study Notes",
+          model_id: "test-model",
+          messages: [{ id: "m2", role: "user", content: "Practice TypeScript", created_at: "2026-10-02T10:00:00Z" }],
+          created_at: "2026-10-02T10:00:00Z",
+          updated_at: "2026-10-02T10:00:00Z",
+        },
+      ],
+    });
+    installFetch(state as Record<string, unknown>);
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(await screen.findByRole("button", { name: "Show conversations" }));
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search conversations" }), "quasarstone");
+
+    expect(screen.getByRole("button", { name: /Work Notes/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Study Notes/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a no-results message for unmatched conversation searches", async () => {
+    const state = apiState({
+      conversations: [
+        {
+          id: "search-empty-1",
+          title: "Meeting Notes",
+          model_id: "test-model",
+          messages: [{ id: "m1", role: "user", content: "Agenda", created_at: "2026-10-01T10:00:00Z" }],
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T10:00:00Z",
+        },
+      ],
+    });
+    installFetch(state as Record<string, unknown>);
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(await screen.findByRole("button", { name: "Show conversations" }));
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search conversations" }), "no-such-conversation");
+
+    expect(screen.getByText("No conversations match your search")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Meeting Notes/ })).not.toBeInTheDocument();
+  });
+
+  it("restores the conversation list when the search is cleared", async () => {
+    const state = apiState({
+      conversations: [
+        {
+          id: "search-clear-1",
+          title: "Kubernetes Notes",
+          model_id: "test-model",
+          messages: [{ id: "m1", role: "user", content: "Cluster configuration", created_at: "2026-10-01T10:00:00Z" }],
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T10:00:00Z",
+        },
+        {
+          id: "search-clear-2",
+          title: "Python Basics",
+          model_id: "test-model",
+          messages: [{ id: "m2", role: "user", content: "Variables and loops", created_at: "2026-10-02T10:00:00Z" }],
+          created_at: "2026-10-02T10:00:00Z",
+          updated_at: "2026-10-02T10:00:00Z",
+        },
+      ],
+    });
+    installFetch(state as Record<string, unknown>);
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(await screen.findByRole("button", { name: "Show conversations" }));
+
+    const search = screen.getByRole("searchbox", { name: "Search conversations" });
+    await userEvent.type(search, "kubernetes");
+    await userEvent.clear(search);
+
+    expect(screen.getByRole("button", { name: /Kubernetes Notes/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Python Basics/ })).toBeInTheDocument();
+    expect(screen.queryByText("No conversations match your search")).not.toBeInTheDocument();
+  });
   it("renders model search results", async () => {
     installFetch(apiState(), true);
     render(<App />);
@@ -308,6 +431,10 @@ describe("core frontend flows", () => {
       downloadedFilenames.push(this.download);
     });
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:conversation-export"), revokeObjectURL: vi.fn() });
+    vi.spyOn(window, "setTimeout").mockImplementation(((callback: TimerHandler) => {
+      if (typeof callback === "function") callback();
+      return 0;
+    }) as typeof window.setTimeout);
 
     await userEvent.click(screen.getByRole("button", { name: "Export conversation as Markdown" }));
     expect(click).toHaveBeenCalledTimes(1);

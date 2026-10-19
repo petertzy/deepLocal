@@ -1100,7 +1100,7 @@ progress {
 
 .conversationList {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   gap: 10px;
   min-width: 0;
   min-height: 0;
@@ -1113,6 +1113,24 @@ progress {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.conversationSearch {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #dce3e5;
+  border-radius: 8px;
+  color: #202428;
+  background: #ffffff;
+  font: inherit;
+}
+
+.conversationSearch:focus {
+  border-color: #2f6f62;
+  outline: 2px solid #9fcfc2;
+  outline-offset: 1px;
 }
 
 .conversationItems {
