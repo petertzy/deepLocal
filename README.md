@@ -542,6 +542,12 @@ build, and test checks together.
 Do not commit downloaded models, tokens, local databases, `target/`,
 `node_modules/`, or build output.
 
+## Learning Resources
+
+Want to learn more about the technologies behind local AI inference?
+
+Explore our [Learning Resources](docs/learning-resources.md) for curated references on llama.cpp, GGUF, model quantization, GPU acceleration, and inference optimization.
+
 ## License
 
 deepLocal is released under the [MIT License](./LICENSE).
