@@ -6,8 +6,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import ReactMarkdown from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
+import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
+import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
+import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import remarkGfm from "remark-gfm";
 import { serializeConversationJson, serializeConversationMarkdown } from "./chat/conversation-export";
 import { DefaultHighestPriorityPrompt, type HighestPriorityPrompt } from "./prompts";
@@ -41,6 +46,12 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
+
+SyntaxHighlighter.registerLanguage("javascript", javascript);
+SyntaxHighlighter.registerLanguage("typescript", typescript);
+SyntaxHighlighter.registerLanguage("python", python);
+SyntaxHighlighter.registerLanguage("bash", bash);
+SyntaxHighlighter.registerLanguage("json", json);
 
 type Tab = "dashboard" | "chat" | "documents" | "models" | "server" | "settings";
 type Health = "online" | "offline";
@@ -902,6 +913,7 @@ function Chat({
 }) {
   const [input, setInput] = useState(() => readStringStorage(CHAT_INPUT_STORAGE_KEY, "Could you please introduce yourself in detail? Thank you."));
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState("");
   const [activeConversationId, setActiveConversationId] = useState(() => readStringStorage(ACTIVE_CHAT_STORAGE_KEY));
   const [showConversationList, setShowConversationList] = useState(() => readJsonStorage(CHAT_SHOW_CONVERSATIONS_STORAGE_KEY, false));
   const [streaming, setStreaming] = useState(() => readJsonStorage(CHAT_STREAMING_STORAGE_KEY, true));
@@ -945,6 +957,13 @@ function Chat({
     return [{ id: conversationModel, name: conversationModel }, ...selectableModels];
   }, [conversationModel, selectableModels]);
   const messages = activeConversation?.messages ?? [];
+  const normalizedConversationQuery = conversationSearchQuery.trim().toLocaleLowerCase();
+  const filteredConversations = normalizedConversationQuery
+    ? conversations.filter((conversation) =>
+        conversation.title.toLocaleLowerCase().includes(normalizedConversationQuery) ||
+        conversation.messages.some((message) => message.content.toLocaleLowerCase().includes(normalizedConversationQuery)),
+      )
+    : conversations;
   const selectedPromptPreset = promptPresets.find((preset) => preset.id === selectedPromptPresetId);
 
   async function refreshPromptPresets() {
@@ -1421,9 +1440,17 @@ function Chat({
             <Plus size={16} />
           </button>
         </div>
+        <input
+          className="conversationSearch"
+          type="search"
+          aria-label="Search conversations"
+          placeholder="Search conversations..."
+          value={conversationSearchQuery}
+          onChange={(event) => setConversationSearchQuery(event.target.value)}
+        />
         <div className="conversationItems">
-          {conversations.length ? (
-            conversations.map((conversation) => (
+          {filteredConversations.length ? (
+            filteredConversations.map((conversation) => (
               <button
                 className={conversation.id === activeConversation?.id ? "conversationItem active" : "conversationItem"}
                 key={conversation.id}
@@ -1437,7 +1464,7 @@ function Chat({
               </button>
             ))
           ) : (
-            <p>No conversations yet</p>
+            <p>{conversations.length ? "No conversations match your search" : "No conversations yet"}</p>
           )}
         </div>
       </section>
