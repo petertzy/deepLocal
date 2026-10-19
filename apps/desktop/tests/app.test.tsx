@@ -96,7 +96,14 @@ describe("core frontend flows", () => {
           id: "search-title-1",
           title: "Kubernetes Notes",
           model_id: "test-model",
-          messages: [{ id: "m1", role: "user", content: "Cluster configuration", created_at: "2026-10-01T10:00:00Z" }],
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              content: "Cluster configuration",
+              created_at: "2026-10-01T10:00:00Z",
+            },
+          ],
           created_at: "2026-10-01T10:00:00Z",
           updated_at: "2026-10-01T10:00:00Z",
         },
@@ -104,22 +111,62 @@ describe("core frontend flows", () => {
           id: "search-title-2",
           title: "Python Basics",
           model_id: "test-model",
-          messages: [{ id: "m2", role: "user", content: "Variables and loops", created_at: "2026-10-02T10:00:00Z" }],
+          messages: [
+            {
+              id: "m2",
+              role: "user",
+              content: "Variables and loops",
+              created_at: "2026-10-02T10:00:00Z",
+            },
+          ],
           created_at: "2026-10-02T10:00:00Z",
           updated_at: "2026-10-02T10:00:00Z",
         },
       ],
     });
+
+    window.localStorage.setItem(
+      "deeplocal:active-chat-conversation",
+      "search-title-2",
+    );
+
     installFetch(state as Record<string, unknown>);
     render(<App />);
     await navigate("Chat");
-    await userEvent.click(await screen.findByRole("button", { name: "Show conversations" }));
 
-    const search = screen.getByRole("searchbox", { name: "Search conversations" });
+    expect(
+      screen.getByRole("heading", { name: "Python Basics" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show conversations" }),
+    );
+
+    const search = screen.getByRole("searchbox", {
+      name: "Search conversations",
+    });
+
     await userEvent.type(search, "kUbErNeTeS");
 
-    expect(screen.getByRole("button", { name: /Kubernetes Notes/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Python Basics/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Kubernetes Notes/ }),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.queryByRole("button", { name: /Python Basics/ }),
+    ).not.toBeInTheDocument();
+
+    expect(
+      window.localStorage.getItem("deeplocal:active-chat-conversation"),
+    ).toBe("search-title-2");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Back to current chat" }),
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Python Basics" }),
+    ).toBeInTheDocument();
   });
 
   it("filters saved conversations by message content", async () => {
@@ -431,10 +478,6 @@ describe("core frontend flows", () => {
       downloadedFilenames.push(this.download);
     });
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:conversation-export"), revokeObjectURL: vi.fn() });
-    vi.spyOn(window, "setTimeout").mockImplementation(((callback: TimerHandler) => {
-      if (typeof callback === "function") callback();
-      return 0;
-    }) as typeof window.setTimeout);
 
     await userEvent.click(screen.getByRole("button", { name: "Export conversation as Markdown" }));
     expect(click).toHaveBeenCalledTimes(1);
