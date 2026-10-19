@@ -87,4 +87,32 @@ Markdown: **bold** & <tag> "quoted"`;
     expect(markdown).toContain("Hello, 世界 👋");
     expect(markdown).toContain('"quoted"');
   });
+  it("serializes empty conversations as valid exports", () => {
+    const empty: ExportChatConversation = {
+      ...conversation,
+      messages: [],
+    };
+
+    const json = JSON.parse(serializeConversationJson(empty));
+    expect(json.conversation.messages).toEqual([]);
+
+    const markdown = serializeConversationMarkdown(empty);
+    expect(markdown).toContain("# Test conversation");
+    expect(markdown.endsWith("\n")).toBe(true);
+  });
+
+  it("preserves intended Unicode characters in both formats", () => {
+    const content = "Unicode check: 世界 👋";
+
+    const unicodeConversation: ExportChatConversation = {
+      ...conversation,
+      messages: [{ role: "user", content }],
+    };
+
+    const json = JSON.parse(serializeConversationJson(unicodeConversation));
+    expect(json.conversation.messages[0].content).toBe(content);
+
+    const markdown = serializeConversationMarkdown(unicodeConversation);
+    expect(markdown).toContain(content);
+  });
 });

@@ -316,6 +316,9 @@ describe("core frontend flows", () => {
     await userEvent.click(screen.getByRole("button", { name: "Export conversation as JSON" }));
     expect(click).toHaveBeenCalledTimes(2);
     expect(downloadedFilenames).toEqual(["Research - notes.md", "Research - notes.json"]);
+
+    // Keep the URL stub active until both scheduled cleanup callbacks have run.
+    await new Promise((resolve) => window.setTimeout(resolve, 1100));
   });
 
   it("creates and selects a prompt preset and inserts its template", async () => {
