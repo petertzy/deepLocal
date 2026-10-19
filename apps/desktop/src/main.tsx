@@ -6,8 +6,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import ReactMarkdown from "react-markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism/index.js";
+import javascript from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
+import typescript from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
+import python from "react-syntax-highlighter/dist/esm/languages/prism/python";
+import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import remarkGfm from "remark-gfm";
 import { serializeConversationJson, serializeConversationMarkdown } from "./chat/conversation-export";
 import { DefaultHighestPriorityPrompt, type HighestPriorityPrompt } from "./prompts";
@@ -41,6 +46,12 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
+
+SyntaxHighlighter.registerLanguage("javascript", javascript);
+SyntaxHighlighter.registerLanguage("typescript", typescript);
+SyntaxHighlighter.registerLanguage("python", python);
+SyntaxHighlighter.registerLanguage("bash", bash);
+SyntaxHighlighter.registerLanguage("json", json);
 
 type Tab = "dashboard" | "chat" | "documents" | "models" | "server" | "settings";
 type Health = "online" | "offline";
