@@ -701,7 +701,7 @@ describe("core frontend flows", () => {
       prompt_template: null,
     }));
     expect(postBodies).toHaveLength(1);
-    expect(postBodies[0]).toMatchObject({ id: "preset-custom", name: "Default assistant" });
+    expect(postBodies[0]).toEqual({ id: "preset-custom" });
   });
 
   it("includes the selected system prompt in chat completion requests", async () => {
