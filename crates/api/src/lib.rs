@@ -1281,7 +1281,7 @@ mod tests {
             )
             .await
             .expect("list presets");
-        assert_eq!(response_json(response).await.as_array().unwrap().len(), 1);
+        assert_eq!(response_json(response).await.as_array().unwrap().len(), 2);
 
         let response = app
             .clone()
@@ -1302,6 +1302,76 @@ mod tests {
             .await
             .expect("delete prompt preset");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn restore_preset_api_only_restores_builtin_presets() {
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            PathBuf::from("./models"),
+            Storage::open_memory().expect("open in-memory storage"),
+        );
+        let response = app.clone().oneshot(
+            Request::builder().uri("/runtime/chat/presets").body(Body::empty()).expect("list request")
+        ).await.expect("list presets");
+        let presets = response_json(response).await;
+        let built_in = &presets.as_array().expect("preset array")[0];
+        let id = built_in["id"].as_str().expect("built-in id");
+        assert_eq!(id, deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_ID.to_string());
+        assert_eq!(built_in["built_in_key"], "default_assistant");
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets",
+            serde_json::json!({"name":"Custom","system_prompt":"Custom instructions"}),
+        )).await.expect("create custom preset");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let custom = response_json(response).await;
+        let custom_id = custom["id"].as_str().expect("custom id");
+        assert!(custom["built_in_key"].is_null());
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets/restore",
+            serde_json::json!({"id":custom_id}),
+        )).await.expect("reject custom restore");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets/restore",
+            serde_json::json!({"id":Uuid::new_v4()}),
+        )).await.expect("reject missing restore");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets",
+            serde_json::json!({"id":id,"name":"Override","system_prompt":"Overridden"}),
+        )).await.expect("reject built-in update");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets/delete",
+            serde_json::json!({"id":id}),
+        )).await.expect("reject built-in delete");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app.clone().oneshot(json_request(
+            "/runtime/chat/presets/restore",
+            serde_json::json!({"id":id}),
+        )).await.expect("restore built-in preset");
+        assert_eq!(response.status(), StatusCode::OK);
+        let restored = response_json(response).await;
+        assert_eq!(restored["name"], deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_NAME);
+        assert_eq!(restored["system_prompt"], deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_SYSTEM_PROMPT);
+        assert!(restored["prompt_template"].is_null());
+
+        let response = app.oneshot(
+            Request::builder().uri("/runtime/chat/presets").body(Body::empty()).expect("list request")
+        ).await.expect("list presets after restore");
+        let presets = response_json(response).await;
+        let custom_after = presets.as_array().expect("presets").iter()
+            .find(|preset| preset["id"] == custom_id).expect("custom remains");
+        assert_eq!(custom_after["system_prompt"], "Custom instructions");
     }
 
     #[tokio::test]
