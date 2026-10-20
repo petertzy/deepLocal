@@ -6,6 +6,8 @@ use uuid::Uuid;
 pub struct PromptPreset {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub built_in_key: Option<String>,
     pub system_prompt: Option<String>,
     pub prompt_template: Option<String>,
     pub created_at: DateTime<Utc>,
