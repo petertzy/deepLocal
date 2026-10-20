@@ -727,7 +727,7 @@ export function App() {
         <header>
           <div>
             <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-            {notice && <p>{notice}</p>}
+            {notice && <p role="status" aria-live="polite" aria-atomic="true">{notice}</p>}
           </div>
           <div className="headerControls">
             <div className={`healthBadge ${health}`}>
