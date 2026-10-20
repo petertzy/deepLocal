@@ -79,7 +79,13 @@ fn manages_prompt_presets() {
     storage
         .upsert_prompt_preset(&preset)
         .expect("update preset");
-    assert!(storage.list_prompt_presets().unwrap().iter().any(|item| item.id == preset.id && item.name == preset.name));
+    assert!(
+        storage
+            .list_prompt_presets()
+            .unwrap()
+            .iter()
+            .any(|item| item.id == preset.id && item.name == preset.name)
+    );
     assert!(storage.delete_prompt_preset(preset.id).unwrap());
     assert_eq!(storage.list_prompt_presets().unwrap().len(), 1);
     assert!(!storage.delete_prompt_preset(preset.id).unwrap());
@@ -217,14 +223,21 @@ fn fresh_storage_seeds_a_stable_builtin_preset() {
     let presets = storage.list_prompt_presets().expect("list presets");
     assert_eq!(presets.len(), 1);
     assert_eq!(presets[0].id, PromptPreset::DEFAULT_ASSISTANT_ID);
-    assert_eq!(presets[0].built_in_key.as_deref(), Some(PromptPreset::DEFAULT_ASSISTANT_KEY));
+    assert_eq!(
+        presets[0].built_in_key.as_deref(),
+        Some(PromptPreset::DEFAULT_ASSISTANT_KEY)
+    );
     assert_eq!(presets[0].name, PromptPreset::DEFAULT_ASSISTANT_NAME);
-    assert_eq!(presets[0].system_prompt.as_deref(), Some(PromptPreset::DEFAULT_ASSISTANT_SYSTEM_PROMPT));
+    assert_eq!(
+        presets[0].system_prompt.as_deref(),
+        Some(PromptPreset::DEFAULT_ASSISTANT_SYSTEM_PROMPT)
+    );
 }
 
 #[test]
 fn reopening_storage_preserves_custom_presets_and_builtin_changes() {
-    let path = std::env::temp_dir().join(format!("deeplocal-preset-migration-{}.db", Uuid::new_v4()));
+    let path =
+        std::env::temp_dir().join(format!("deeplocal-preset-migration-{}.db", Uuid::new_v4()));
     let now = Utc::now();
     let custom = PromptPreset {
         id: Uuid::new_v4(),
@@ -245,23 +258,41 @@ fn reopening_storage_preserves_custom_presets_and_builtin_changes() {
     }
     {
         let storage = Storage::open(&path).expect("migrate legacy database");
-        let presets = storage.list_prompt_presets().expect("list migrated presets");
+        let presets = storage
+            .list_prompt_presets()
+            .expect("list migrated presets");
         assert_eq!(presets.len(), 2);
         assert!(presets.contains(&custom));
-        let mut built_in = presets.into_iter().find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID).expect("built-in preset");
+        let mut built_in = presets
+            .into_iter()
+            .find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID)
+            .expect("built-in preset");
         built_in.name = "My renamed assistant".to_string();
         built_in.system_prompt = Some("My edited instructions.".to_string());
-        storage.upsert_prompt_preset(&built_in).expect("update built-in preset");
+        storage
+            .upsert_prompt_preset(&built_in)
+            .expect("update built-in preset");
     }
     {
         let storage = Storage::open(&path).expect("reopen migrated database");
-        let presets = storage.list_prompt_presets().expect("list reopened presets");
+        let presets = storage
+            .list_prompt_presets()
+            .expect("list reopened presets");
         assert_eq!(presets.len(), 2);
         assert!(presets.contains(&custom));
-        let built_in = presets.iter().find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID).expect("built-in preset");
+        let built_in = presets
+            .iter()
+            .find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID)
+            .expect("built-in preset");
         assert_eq!(built_in.name, "My renamed assistant");
-        assert_eq!(built_in.system_prompt.as_deref(), Some("My edited instructions."));
-        assert_eq!(built_in.built_in_key.as_deref(), Some(PromptPreset::DEFAULT_ASSISTANT_KEY));
+        assert_eq!(
+            built_in.system_prompt.as_deref(),
+            Some("My edited instructions.")
+        );
+        assert_eq!(
+            built_in.built_in_key.as_deref(),
+            Some(PromptPreset::DEFAULT_ASSISTANT_KEY)
+        );
     }
     std::fs::remove_file(path).expect("remove test database");
 }
