@@ -459,6 +459,128 @@ describe("core frontend flows", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("copies an individual user chat message", async () => {
+    const conversation = {
+      id: "copy-user-message-test",
+      title: "Copy message test",
+      model_id: model.id,
+      messages: [
+        {
+          id: "copy-user-message-1",
+          role: "user" as const,
+          content: "Copy this user message.",
+          created_at: "2026-10-20T10:00:00Z",
+        },
+      ],
+      created_at: "2026-10-20T10:00:00Z",
+      updated_at: "2026-10-20T10:00:00Z",
+    };
+
+    window.localStorage.setItem(
+      "deeplocal:active-chat-conversation",
+      conversation.id,
+    );
+    installFetch(
+      apiState({
+        models: [model],
+        loaded: [{ id: model.id, backend: "mock", status: "loaded" }],
+        conversations: [conversation],
+      }),
+    );
+
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(<App />);
+      await navigate("Chat");
+
+      const message = screen.getByText("Copy this user message.").closest(".message");
+      expect(message).not.toBeNull();
+
+      await userEvent.click(
+        within(message as HTMLElement).getByRole("button", { name: "Copy" }),
+      );
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("Copy this user message.");
+      });
+      expect(
+        await within(message as HTMLElement).findByRole("button", { name: "Copied" }),
+      ).toBeInTheDocument();
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    }
+  });
+  it("announces clipboard failure without marking the message as copied", async () => {
+    const conversation = {
+      id: "copy-failure-test",
+      title: "Copy failure test",
+      model_id: model.id,
+      messages: [
+        {
+          id: "copy-failure-message",
+          role: "user" as const,
+          content: "Clipboard permission test.",
+          created_at: "2026-10-20T10:00:00Z",
+        },
+      ],
+      created_at: "2026-10-20T10:00:00Z",
+      updated_at: "2026-10-20T10:00:00Z",
+    };
+
+    window.localStorage.setItem("deeplocal:active-chat-conversation", conversation.id);
+    installFetch(
+      apiState({
+        models: [model],
+        loaded: [{ id: model.id, backend: "mock", status: "loaded" }],
+        conversations: [conversation],
+      }),
+    );
+
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Permission denied", "NotAllowedError"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(<App />);
+      await navigate("Chat");
+
+      const message = screen.getByText("Clipboard permission test.").closest(".message");
+      expect(message).not.toBeNull();
+
+      await userEvent.click(
+        within(message as HTMLElement).getByRole("button", { name: "Copy" }),
+      );
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith("Clipboard permission test.");
+      });
+      expect(
+        await screen.findByRole("status", { name: "" }),
+      ).toHaveTextContent("Copy failed. Check clipboard permissions.");
+      expect(within(message as HTMLElement).getByRole("button", { name: "Copy" })).toBeInTheDocument();
+      expect(within(message as HTMLElement).queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    }
+  });
+
   it("exports the active conversation with a sanitized filename in both formats", async () => {
     const conversation = {
       id: "conversation-export-test",
