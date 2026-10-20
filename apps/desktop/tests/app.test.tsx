@@ -658,6 +658,7 @@ describe("core frontend flows", () => {
     const preset = {
       id: "preset-custom",
       name: "Patient tutor",
+      built_in_key: "default_assistant",
       system_prompt: "My custom instructions.",
       prompt_template: "My template",
       created_at: "2026-09-18T09:00:00Z",
@@ -669,10 +670,10 @@ describe("core frontend flows", () => {
     const fetchMock = installFetch(state);
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
-      if (path === "/runtime/chat/presets" && init?.method === "POST") {
+      if (path === "/runtime/chat/presets/restore" && init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         postBodies.push(body);
-        const saved = { ...presets[0], ...body, updated_at: "2026-10-20T09:00:00Z" };
+        const saved = { ...presets[0], name: "Default assistant", system_prompt: "You are a helpful assistant. Give accurate, clear, and useful answers. Be transparent about uncertainty and do not invent facts.", prompt_template: null, updated_at: "2026-10-20T09:00:00Z" };
         presets.splice(0, presets.length, saved);
         return jsonResponse(saved);
       }
