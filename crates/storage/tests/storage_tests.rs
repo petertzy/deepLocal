@@ -60,6 +60,7 @@ fn manages_prompt_presets() {
     let mut preset = PromptPreset {
         id: Uuid::new_v4(),
         name: "Code reviewer".to_string(),
+        built_in_key: None,
         system_prompt: Some("Review code carefully and explain risks.".to_string()),
         prompt_template: Some("Review this code:\n{{code}}".to_string()),
         created_at: now,
