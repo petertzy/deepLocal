@@ -60,6 +60,7 @@ fn manages_prompt_presets() {
     let mut preset = PromptPreset {
         id: Uuid::new_v4(),
         name: "Code reviewer".to_string(),
+        built_in_key: None,
         system_prompt: Some("Review code carefully and explain risks.".to_string()),
         prompt_template: Some("Review this code:\n{{code}}".to_string()),
         created_at: now,
@@ -70,16 +71,23 @@ fn manages_prompt_presets() {
         .upsert_prompt_preset(&preset)
         .expect("create preset");
     let presets = storage.list_prompt_presets().expect("list presets");
-    assert_eq!(presets, vec![preset.clone()]);
+    assert!(presets.contains(&preset));
+    assert_eq!(presets.len(), 2);
 
     preset.name = "Senior code reviewer".to_string();
     preset.updated_at = Utc::now();
     storage
         .upsert_prompt_preset(&preset)
         .expect("update preset");
-    assert_eq!(storage.list_prompt_presets().unwrap()[0].name, preset.name);
+    assert!(
+        storage
+            .list_prompt_presets()
+            .unwrap()
+            .iter()
+            .any(|item| item.id == preset.id && item.name == preset.name)
+    );
     assert!(storage.delete_prompt_preset(preset.id).unwrap());
-    assert!(storage.list_prompt_presets().unwrap().is_empty());
+    assert_eq!(storage.list_prompt_presets().unwrap().len(), 1);
     assert!(!storage.delete_prompt_preset(preset.id).unwrap());
 }
 
@@ -207,4 +215,84 @@ fn replaces_documents_and_persists_local_embeddings() {
             .expect("list removed documents")
             .is_empty()
     );
+}
+
+#[test]
+fn fresh_storage_seeds_a_stable_builtin_preset() {
+    let storage = Storage::open_memory().expect("open storage");
+    let presets = storage.list_prompt_presets().expect("list presets");
+    assert_eq!(presets.len(), 1);
+    assert_eq!(presets[0].id, PromptPreset::DEFAULT_ASSISTANT_ID);
+    assert_eq!(
+        presets[0].built_in_key.as_deref(),
+        Some(PromptPreset::DEFAULT_ASSISTANT_KEY)
+    );
+    assert_eq!(presets[0].name, PromptPreset::DEFAULT_ASSISTANT_NAME);
+    assert_eq!(
+        presets[0].system_prompt.as_deref(),
+        Some(PromptPreset::DEFAULT_ASSISTANT_SYSTEM_PROMPT)
+    );
+}
+
+#[test]
+fn reopening_storage_preserves_custom_presets_and_builtin_changes() {
+    let path =
+        std::env::temp_dir().join(format!("deeplocal-preset-migration-{}.db", Uuid::new_v4()));
+    let now = Utc::now();
+    let custom = PromptPreset {
+        id: Uuid::new_v4(),
+        name: "Default assistant".to_string(),
+        built_in_key: None,
+        system_prompt: Some("Do not replace these instructions.".to_string()),
+        prompt_template: Some("Keep this template.".to_string()),
+        created_at: now,
+        updated_at: now,
+    };
+    {
+        let conn = rusqlite::Connection::open(&path).expect("open legacy database");
+        conn.execute_batch("create table prompt_presets (id text primary key, name text not null, system_prompt text, prompt_template text, created_at text not null, updated_at text not null);").expect("create legacy schema");
+        conn.execute(
+            "insert into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at) values (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![custom.id.to_string(), custom.name, custom.system_prompt, custom.prompt_template, now.to_rfc3339(), now.to_rfc3339()],
+        ).expect("insert legacy preset");
+    }
+    {
+        let storage = Storage::open(&path).expect("migrate legacy database");
+        let presets = storage
+            .list_prompt_presets()
+            .expect("list migrated presets");
+        assert_eq!(presets.len(), 2);
+        assert!(presets.contains(&custom));
+        let mut built_in = presets
+            .into_iter()
+            .find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID)
+            .expect("built-in preset");
+        built_in.name = "My renamed assistant".to_string();
+        built_in.system_prompt = Some("My edited instructions.".to_string());
+        storage
+            .upsert_prompt_preset(&built_in)
+            .expect("update built-in preset");
+    }
+    {
+        let storage = Storage::open(&path).expect("reopen migrated database");
+        let presets = storage
+            .list_prompt_presets()
+            .expect("list reopened presets");
+        assert_eq!(presets.len(), 2);
+        assert!(presets.contains(&custom));
+        let built_in = presets
+            .iter()
+            .find(|preset| preset.id == PromptPreset::DEFAULT_ASSISTANT_ID)
+            .expect("built-in preset");
+        assert_eq!(built_in.name, "My renamed assistant");
+        assert_eq!(
+            built_in.system_prompt.as_deref(),
+            Some("My edited instructions.")
+        );
+        assert_eq!(
+            built_in.built_in_key.as_deref(),
+            Some(PromptPreset::DEFAULT_ASSISTANT_KEY)
+        );
+    }
+    std::fs::remove_file(path).expect("remove test database");
 }

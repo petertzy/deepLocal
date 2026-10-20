@@ -606,6 +606,104 @@ describe("core frontend flows", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/runtime/chat/presets"), expect.objectContaining({ method: "POST" }));
   });
 
+  it("duplicates a prompt preset without changing the original", async () => {
+    const preset = {
+      id: "preset-original",
+      name: "Patient tutor",
+      system_prompt: "Explain with examples.",
+      prompt_template: "Explain: {{topic}}",
+      created_at: "2026-09-18T09:00:00Z",
+      updated_at: "2026-09-18T09:00:00Z",
+    };
+    const presets: Record<string, unknown>[] = [{ ...preset }];
+    const postBodies: Record<string, unknown>[] = [];
+    const state = apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }] }) as Record<string, unknown>;
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/chat/presets" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        postBodies.push(body);
+        const saved = {
+          ...body,
+          id: "preset-copy",
+          created_at: "2026-10-20T09:00:00Z",
+          updated_at: "2026-10-20T09:00:00Z",
+        };
+        presets.push(saved);
+        return jsonResponse(saved);
+      }
+      if (path === "/runtime/chat/presets") return jsonResponse(presets);
+      return jsonResponse(state[path] ?? []);
+    });
+
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Manage prompt presets" }));
+    await userEvent.click(screen.getByRole("button", { name: "Duplicate Patient tutor" }));
+
+    await waitFor(() => expect(presets).toHaveLength(2));
+    expect(presets[0]).toMatchObject({ id: "preset-original", name: "Patient tutor" });
+    expect(presets[1]).toMatchObject({
+      id: "preset-copy",
+      name: "Patient tutor (copy)",
+      system_prompt: "Explain with examples.",
+      prompt_template: "Explain: {{topic}}",
+    });
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).not.toHaveProperty("id");
+  });
+
+  it("requires confirmation before restoring defaults and supports cancellation", async () => {
+    const preset = {
+      id: "preset-custom",
+      name: "Patient tutor",
+      built_in_key: "default_assistant",
+      system_prompt: "My custom instructions.",
+      prompt_template: "My template",
+      created_at: "2026-09-18T09:00:00Z",
+      updated_at: "2026-09-18T09:00:00Z",
+    };
+    const presets: Record<string, unknown>[] = [{ ...preset }];
+    const postBodies: Record<string, unknown>[] = [];
+    const state = apiState({ models: [model], loaded: [{ id: model.id, backend: "mock", status: "loaded" }] }) as Record<string, unknown>;
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/chat/presets/restore" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        postBodies.push(body);
+        const saved = { ...presets[0], name: "Default assistant", system_prompt: "You are a helpful assistant. Give accurate, clear, and useful answers. Be transparent about uncertainty and do not invent facts.", prompt_template: null, updated_at: "2026-10-20T09:00:00Z" };
+        presets.splice(0, presets.length, saved);
+        return jsonResponse(saved);
+      }
+      if (path === "/runtime/chat/presets") return jsonResponse(presets);
+      return jsonResponse(state[path] ?? []);
+    });
+
+    render(<App />);
+    await navigate("Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Manage prompt presets" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore defaults for Patient tutor" }));
+    expect(await screen.findByRole("dialog", { name: "Restore prompt preset defaults" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(postBodies).toHaveLength(0);
+    expect(presets[0]).toMatchObject({ system_prompt: "My custom instructions.", prompt_template: "My template" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore defaults for Patient tutor" }));
+    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+
+    await waitFor(() => expect(presets[0]).toMatchObject({
+      id: "preset-custom",
+      name: "Default assistant",
+      system_prompt: "You are a helpful assistant. Give accurate, clear, and useful answers. Be transparent about uncertainty and do not invent facts.",
+      prompt_template: null,
+    }));
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toEqual({ id: "preset-custom" });
+  });
+
   it("includes the selected system prompt in chat completion requests", async () => {
     window.localStorage.setItem("deeplocal:chat-streaming", "false");
     const conversation = {

@@ -142,6 +142,7 @@ fn router_with_storage(
             "/runtime/chat/presets",
             get(list_prompt_presets).post(save_prompt_preset),
         )
+        .route("/runtime/chat/presets/restore", post(restore_prompt_preset))
         .route("/runtime/chat/presets/delete", post(delete_prompt_preset))
         .route("/runtime/chat/messages", post(append_chat_message))
         .route("/runtime/documents", get(documents).post(ingest_document))
@@ -1280,7 +1281,7 @@ mod tests {
             )
             .await
             .expect("list presets");
-        assert_eq!(response_json(response).await.as_array().unwrap().len(), 1);
+        assert_eq!(response_json(response).await.as_array().unwrap().len(), 2);
 
         let response = app
             .clone()
@@ -1301,6 +1302,126 @@ mod tests {
             .await
             .expect("delete prompt preset");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn restore_preset_api_only_restores_builtin_presets() {
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            PathBuf::from("./models"),
+            Storage::open_memory().expect("open in-memory storage"),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/runtime/chat/presets")
+                    .body(Body::empty())
+                    .expect("list request"),
+            )
+            .await
+            .expect("list presets");
+        let presets = response_json(response).await;
+        let built_in = &presets.as_array().expect("preset array")[0];
+        let id = built_in["id"].as_str().expect("built-in id");
+        assert_eq!(
+            id,
+            deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_ID.to_string()
+        );
+        assert_eq!(built_in["built_in_key"], "default_assistant");
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets",
+                serde_json::json!({"name":"Custom","system_prompt":"Custom instructions"}),
+            ))
+            .await
+            .expect("create custom preset");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let custom = response_json(response).await;
+        let custom_id = custom["id"].as_str().expect("custom id");
+        assert!(custom["built_in_key"].is_null());
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets/restore",
+                serde_json::json!({"id":custom_id}),
+            ))
+            .await
+            .expect("reject custom restore");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets/restore",
+                serde_json::json!({"id":Uuid::new_v4()}),
+            ))
+            .await
+            .expect("reject missing restore");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets",
+                serde_json::json!({"id":id,"name":"Override","system_prompt":"Overridden"}),
+            ))
+            .await
+            .expect("reject built-in update");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets/delete",
+                serde_json::json!({"id":id}),
+            ))
+            .await
+            .expect("reject built-in delete");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/chat/presets/restore",
+                serde_json::json!({"id":id}),
+            ))
+            .await
+            .expect("restore built-in preset");
+        assert_eq!(response.status(), StatusCode::OK);
+        let restored = response_json(response).await;
+        assert_eq!(
+            restored["name"],
+            deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_NAME
+        );
+        assert_eq!(
+            restored["system_prompt"],
+            deeplocal_core::PromptPreset::DEFAULT_ASSISTANT_SYSTEM_PROMPT
+        );
+        assert!(restored["prompt_template"].is_null());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/runtime/chat/presets")
+                    .body(Body::empty())
+                    .expect("list request"),
+            )
+            .await
+            .expect("list presets after restore");
+        let presets = response_json(response).await;
+        let custom_after = presets
+            .as_array()
+            .expect("presets")
+            .iter()
+            .find(|preset| preset["id"] == custom_id)
+            .expect("custom remains");
+        assert_eq!(custom_after["system_prompt"], "Custom instructions");
     }
 
     #[tokio::test]
@@ -2851,6 +2972,52 @@ struct SavePromptPresetRequest {
     prompt_template: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RestorePromptPresetRequest {
+    id: Uuid,
+}
+
+async fn restore_prompt_preset(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<RestorePromptPresetRequest>,
+) -> impl IntoResponse {
+    let storage = state.storage.lock().await;
+    let mut preset = match storage.list_prompt_presets() {
+        Ok(presets) => match presets.into_iter().find(|preset| preset.id == body.id) {
+            Some(preset) => preset,
+            None => {
+                return (
+                    axum::http::StatusCode::NOT_FOUND,
+                    "Prompt preset not found.",
+                )
+                    .into_response();
+            }
+        },
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
+    };
+    if !preset.restore_defaults() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Only built-in presets can be restored.",
+        )
+            .into_response();
+    }
+    match storage.upsert_prompt_preset(&preset) {
+        Ok(()) => Json(preset).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
+    }
+}
+
 async fn list_prompt_presets(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
     let storage = state.storage.lock().await;
     match storage.list_prompt_presets() {
@@ -2907,11 +3074,25 @@ async fn save_prompt_preset(
         )
             .into_response();
     }
+    if existing
+        .as_ref()
+        .and_then(|preset| preset.built_in_key.as_deref())
+        .is_some()
+    {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "Built-in presets must be restored through the restore endpoint.",
+        )
+            .into_response();
+    }
     let now = Utc::now();
     let is_new = body.id.is_none();
     let preset = PromptPreset {
         id: body.id.unwrap_or_else(Uuid::new_v4),
         name: name.to_string(),
+        built_in_key: existing
+            .as_ref()
+            .and_then(|preset| preset.built_in_key.clone()),
         system_prompt: system_prompt.map(|value| value.trim().to_string()),
         prompt_template: prompt_template.map(|value| value.trim().to_string()),
         created_at: existing.map(|preset| preset.created_at).unwrap_or(now),
@@ -2945,6 +3126,18 @@ async fn delete_prompt_preset(
     Json(body): Json<DeletePromptPresetRequest>,
 ) -> impl IntoResponse {
     let storage = state.storage.lock().await;
+    if let Ok(presets) = storage.list_prompt_presets() {
+        if presets
+            .iter()
+            .any(|preset| preset.id == body.id && preset.built_in_key.is_some())
+        {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                "Built-in presets cannot be deleted.",
+            )
+                .into_response();
+        }
+    }
     match storage.delete_prompt_preset(body.id) {
         Ok(true) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (

@@ -44,6 +44,7 @@ import {
   Square,
   Trash2,
   X,
+  RotateCcw,
 } from "lucide-react";
 import "./styles.css";
 
@@ -139,6 +140,7 @@ type ChatConversation = {
 type PromptPreset = {
   id: string;
   name: string;
+  built_in_key?: string | null;
   system_prompt: string | null;
   prompt_template: string | null;
   created_at: string;
@@ -929,6 +931,7 @@ function Chat({
   const [promptPresetTemplate, setPromptPresetTemplate] = useState("");
   const [savingPromptPreset, setSavingPromptPreset] = useState(false);
   const [deletingPromptPreset, setDeletingPromptPreset] = useState<PromptPreset | null>(null);
+  const [restoringPromptPreset, setRestoringPromptPreset] = useState<PromptPreset | null>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ChatConversation | null>(null);
@@ -1027,6 +1030,58 @@ function Chat({
       onNotice(`Saved prompt preset “${saved.name}”.`);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "Could not save prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
+
+  async function duplicatePromptPreset(preset: PromptPreset) {
+    const baseName = `${preset.name} (copy)`;
+    const existingNames = new Set(promptPresets.map((item) => item.name));
+    let name = baseName;
+    let suffix = 2;
+    while (existingNames.has(name)) {
+      name = `${baseName} ${suffix++}`;
+    }
+
+    setSavingPromptPreset(true);
+    try {
+      const response = await fetch(`${API_BASE}/runtime/chat/presets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          system_prompt: preset.system_prompt,
+          prompt_template: preset.prompt_template,
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const saved = (await response.json()) as PromptPreset;
+      await refreshPromptPresets();
+      selectPromptPreset(saved.id);
+      onNotice(`Duplicated prompt preset “${saved.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not duplicate prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
+
+  async function restorePromptPresetDefaults(preset: PromptPreset) {
+    setSavingPromptPreset(true);
+    try {
+      const response = await fetch(`${API_BASE}/runtime/chat/presets/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: preset.id }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await response.json();
+      await refreshPromptPresets();
+      setRestoringPromptPreset(null);
+      onNotice(`Restored defaults for “${preset.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not restore prompt preset defaults.");
     } finally {
       setSavingPromptPreset(false);
     }
@@ -1712,7 +1767,9 @@ function Chat({
                       <small>{[preset.system_prompt && "System prompt", preset.prompt_template && "Template"].filter(Boolean).join(" · ")}</small>
                     </div>
                     <button className="iconButton" aria-label={`Edit ${preset.name}`} title="Edit preset" onClick={() => startEditingPromptPreset(preset)}><Pencil size={14} /></button>
-                    <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>
+                    <button className="iconButton" aria-label={`Duplicate ${preset.name}`} title="Duplicate preset" disabled={savingPromptPreset} onClick={() => void duplicatePromptPreset(preset)}><Copy size={14} /></button>
+                    {preset.built_in_key && <button className="iconButton" aria-label={`Restore defaults for ${preset.name}`} title="Restore defaults" disabled={savingPromptPreset} onClick={() => setRestoringPromptPreset(preset)}><RotateCcw size={14} /></button>}
+                    {!preset.built_in_key && <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>}
                   </article>
                 )) : <p className="promptPresetEmpty">No saved presets yet.</p>}
               </div>
@@ -1740,6 +1797,17 @@ function Chat({
             </div>
           </section>
         </div>
+      )}
+      {restoringPromptPreset && (
+        <ConfirmationDialog
+          title="Restore prompt preset defaults"
+          message={`Restore built-in defaults for “${restoringPromptPreset.name}”?`}
+          detail="The selected preset's name, system prompt, and template will be replaced. This cannot be undone."
+          confirmLabel="Restore defaults"
+          busy={savingPromptPreset}
+          onCancel={() => setRestoringPromptPreset(null)}
+          onConfirm={() => void restorePromptPresetDefaults(restoringPromptPreset)}
+        />
       )}
       {deletingPromptPreset && (
         <ConfirmationDialog
