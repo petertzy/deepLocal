@@ -142,8 +142,7 @@ fn router_with_storage(
             "/runtime/chat/presets",
             get(list_prompt_presets).post(save_prompt_preset),
         )
-        .route("/runtime/chat/presets/restore", post(restore_prompt_preset),
-        )
+        .route("/runtime/chat/presets/restore", post(restore_prompt_preset))
         .route("/runtime/chat/presets/delete", post(delete_prompt_preset))
         .route("/runtime/chat/messages", post(append_chat_message))
         .route("/runtime/documents", get(documents).post(ingest_document))
@@ -2854,21 +2853,48 @@ struct SavePromptPresetRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct RestorePromptPresetRequest { id: Uuid }
+struct RestorePromptPresetRequest {
+    id: Uuid,
+}
 
-async fn restore_prompt_preset(State(state): State<Arc<ApiState>>, Json(body): Json<RestorePromptPresetRequest>) -> impl IntoResponse {
+async fn restore_prompt_preset(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<RestorePromptPresetRequest>,
+) -> impl IntoResponse {
     let storage = state.storage.lock().await;
     let mut preset = match storage.list_prompt_presets() {
         Ok(presets) => match presets.into_iter().find(|preset| preset.id == body.id) {
             Some(preset) => preset,
-            None => return (axum::http::StatusCode::NOT_FOUND, "Prompt preset not found.").into_response(),
+            None => {
+                return (
+                    axum::http::StatusCode::NOT_FOUND,
+                    "Prompt preset not found.",
+                )
+                    .into_response();
+            }
         },
-        Err(error) => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
     };
-    if !preset.restore_defaults() { return (axum::http::StatusCode::BAD_REQUEST, "Only built-in presets can be restored.").into_response(); }
+    if !preset.restore_defaults() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "Only built-in presets can be restored.",
+        )
+            .into_response();
+    }
     match storage.upsert_prompt_preset(&preset) {
         Ok(()) => Json(preset).into_response(),
-        Err(error) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        Err(error) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -2928,15 +2954,25 @@ async fn save_prompt_preset(
         )
             .into_response();
     }
-    if existing.as_ref().and_then(|preset| preset.built_in_key.as_deref()).is_some() {
-        return (axum::http::StatusCode::FORBIDDEN, "Built-in presets must be restored through the restore endpoint.").into_response();
+    if existing
+        .as_ref()
+        .and_then(|preset| preset.built_in_key.as_deref())
+        .is_some()
+    {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "Built-in presets must be restored through the restore endpoint.",
+        )
+            .into_response();
     }
     let now = Utc::now();
     let is_new = body.id.is_none();
     let preset = PromptPreset {
         id: body.id.unwrap_or_else(Uuid::new_v4),
         name: name.to_string(),
-        built_in_key: existing.as_ref().and_then(|preset| preset.built_in_key.clone()),
+        built_in_key: existing
+            .as_ref()
+            .and_then(|preset| preset.built_in_key.clone()),
         system_prompt: system_prompt.map(|value| value.trim().to_string()),
         prompt_template: prompt_template.map(|value| value.trim().to_string()),
         created_at: existing.map(|preset| preset.created_at).unwrap_or(now),
@@ -2971,8 +3007,15 @@ async fn delete_prompt_preset(
 ) -> impl IntoResponse {
     let storage = state.storage.lock().await;
     if let Ok(presets) = storage.list_prompt_presets() {
-        if presets.iter().any(|preset| preset.id == body.id && preset.built_in_key.is_some()) {
-            return (axum::http::StatusCode::FORBIDDEN, "Built-in presets cannot be deleted.").into_response();
+        if presets
+            .iter()
+            .any(|preset| preset.id == body.id && preset.built_in_key.is_some())
+        {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                "Built-in presets cannot be deleted.",
+            )
+                .into_response();
         }
     }
     match storage.delete_prompt_preset(body.id) {

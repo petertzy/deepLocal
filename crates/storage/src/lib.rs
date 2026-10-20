@@ -102,11 +102,16 @@ impl Storage {
                 on document_chunks(document_id, chunk_index);
             ",
         )?;
-        let columns = self.conn.prepare("pragma table_info(prompt_presets)")?
+        let columns = self
+            .conn
+            .prepare("pragma table_info(prompt_presets)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?;
         if !columns.iter().any(|column| column == "built_in_key") {
-            self.conn.execute("alter table prompt_presets add column built_in_key text", [])?;
+            self.conn.execute(
+                "alter table prompt_presets add column built_in_key text",
+                [],
+            )?;
         }
         Ok(())
     }
