@@ -113,6 +113,21 @@ impl Storage {
                 [],
             )?;
         }
+        // Seed the built-in preset only when absent; never overwrite user changes.
+        let preset = PromptPreset::default_assistant();
+        self.conn.execute(
+            "insert or ignore into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at, built_in_key)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                preset.id.to_string(),
+                preset.name,
+                preset.system_prompt,
+                preset.prompt_template,
+                preset.created_at.to_rfc3339(),
+                preset.updated_at.to_rfc3339(),
+                preset.built_in_key,
+            ],
+        )?;
         Ok(())
     }
 
