@@ -1263,10 +1263,10 @@ function Chat({
     abortRef.current?.abort();
   }
 
-  async function copyAssistantContent(content: string) {
+  async function copyMessageContent(content: string) {
     try {
       await navigator.clipboard.writeText(content);
-      onNotice("Copied AI response.");
+      onNotice("Copied to clipboard.");
       return true;
     } catch {
       onNotice("Copy failed. Check clipboard permissions.");
@@ -1594,7 +1594,7 @@ function Chat({
                                   >
                                     {code}
                                   </SyntaxHighlighter>
-                                  <CopyButton onCopy={() => copyAssistantContent(code)} />
+                                  <CopyButton onCopy={() => copyMessageContent(code)} />
                                 </div>
                               );
                             }
@@ -1611,11 +1611,19 @@ function Chat({
                       </ReactMarkdown>
                     </div>
                     <div className="messageActions">
-                      <CopyButton disabled={!message.content.trim()} onCopy={() => copyAssistantContent(message.content)} />
+                      <CopyButton disabled={!message.content.trim()} onCopy={() => copyMessageContent(message.content)} />
                     </div>
                   </>
                 ) : (
-                  message.content
+                  <>
+                    {message.content}
+                    <div className="messageActions">
+                      <CopyButton
+                        disabled={!message.content.trim()}
+                        onCopy={() => copyMessageContent(message.content)}
+                      />
+                    </div>
+                  </>
                 )}
               </div>
             ))
