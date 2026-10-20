@@ -137,15 +137,10 @@ type ChatConversation = {
   updated_at: string;
 };
 
-const BUILT_IN_PROMPT_PRESET_DEFAULTS = {
-  name: "Default assistant",
-  system_prompt: "You are a helpful assistant. Give accurate, clear, and useful answers. Be transparent about uncertainty and do not invent facts.",
-  prompt_template: null,
-} as const;
-
 type PromptPreset = {
   id: string;
   name: string;
+  built_in_key?: string | null;
   system_prompt: string | null;
   prompt_template: string | null;
   created_at: string;
@@ -1075,19 +1070,16 @@ function Chat({
   async function restorePromptPresetDefaults(preset: PromptPreset) {
     setSavingPromptPreset(true);
     try {
-      const response = await fetch(`${API_BASE}/runtime/chat/presets`, {
+      const response = await fetch(`${API_BASE}/runtime/chat/presets/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: preset.id,
-          ...BUILT_IN_PROMPT_PRESET_DEFAULTS,
-        }),
+        body: JSON.stringify({ id: preset.id }),
       });
       if (!response.ok) throw new Error(await response.text());
       await response.json();
       await refreshPromptPresets();
       setRestoringPromptPreset(null);
-      onNotice(`Restored defaults for “${BUILT_IN_PROMPT_PRESET_DEFAULTS.name}”.`);
+      onNotice(`Restored defaults for “${preset.name}”.`);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "Could not restore prompt preset defaults.");
     } finally {
@@ -1095,7 +1087,7 @@ function Chat({
     }
   }
 
-async function deletePromptPreset(preset: PromptPreset) {
+  async function deletePromptPreset(preset: PromptPreset) {
     setSavingPromptPreset(true);
     try {
       const res = await fetch(`${API_BASE}/runtime/chat/presets/delete`, {
@@ -1776,8 +1768,8 @@ async function deletePromptPreset(preset: PromptPreset) {
                     </div>
                     <button className="iconButton" aria-label={`Edit ${preset.name}`} title="Edit preset" onClick={() => startEditingPromptPreset(preset)}><Pencil size={14} /></button>
                     <button className="iconButton" aria-label={`Duplicate ${preset.name}`} title="Duplicate preset" disabled={savingPromptPreset} onClick={() => void duplicatePromptPreset(preset)}><Copy size={14} /></button>
-                    <button className="iconButton" aria-label={`Restore defaults for ${preset.name}`} title="Restore defaults" disabled={savingPromptPreset} onClick={() => setRestoringPromptPreset(preset)}><RotateCcw size={14} /></button>
-                    <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>
+                    {preset.built_in_key && <button className="iconButton" aria-label={`Restore defaults for ${preset.name}`} title="Restore defaults" disabled={savingPromptPreset} onClick={() => setRestoringPromptPreset(preset)}><RotateCcw size={14} /></button>}
+                    {!preset.built_in_key && <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>}
                   </article>
                 )) : <p className="promptPresetEmpty">No saved presets yet.</p>}
               </div>
