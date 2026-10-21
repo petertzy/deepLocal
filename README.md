@@ -502,6 +502,116 @@ enabled:
 
 ### Packaging and releases
 
+### Desktop release runbook (maintainers)
+
+Windows/Linux packaging and publishing are **two separate, manually triggered**
+GitHub Actions workflows. Neither starts the other automatically. The macOS
+release is built and uploaded locally from a Mac.
+
+#### Publish Windows and Linux
+
+1. Merge the intended changes into `main`. Open
+   [GitHub Actions](https://github.com/petertzy/deepLocal/actions), select
+   [Desktop packaging](https://github.com/petertzy/deepLocal/actions/workflows/desktop-packaging.yml),
+   choose **Run workflow**, select `main`, and start the run.
+2. Wait until **both** `Package ubuntu-22.04` and `Package windows-2022`
+   succeed. Open the run and inspect its artifacts. Each platform artifact
+   contains a `release-version.txt` manifest; both must contain the same
+   `vMAJOR.MINOR.PATCH` version. The Linux build produces a `.deb` and an
+   `.AppImage`; Windows produces an NSIS `.exe`.
+3. Confirm the proposed version is unused and the build corresponds to the
+   commit you intend to release. The packaging workflow calculates the next
+   patch version from published semantic-version GitHub Releases and embeds
+   that version in both installers. For example, if the newest release is
+   `v0.1.14`, the next packaged version is normally `v0.1.15`.
+4. Select
+   [Publish desktop release](https://github.com/petertzy/deepLocal/actions/workflows/publish-desktop-release.yml)
+   and choose **Run workflow** on `main`. No input fields are required.
+   The publisher selects the **latest successful manually triggered**
+   `Desktop packaging` run, downloads its artifacts, checks that both
+   manifests match, validates the three installers, and creates a GitHub
+   Release tagged with the packaged version at the packaging run's commit.
+5. Open [GitHub Releases](https://github.com/petertzy/deepLocal/releases)
+   and verify the new tag and all three installer assets. Download and
+   smoke-test the Windows and Linux installers on suitable machines.
+
+**Important safeguards and limitations:**
+
+- Do not run another successful packaging job between the intended build and
+  publishing: the publisher has no run-selection input and always picks the
+  latest successful packaging run, which may not be the run you intended.
+- The publisher refuses to overwrite an existing tag or Release. If another
+  release was created after packaging, run **Desktop packaging** again to
+  calculate a fresh version; do not rename old installer files or bypass the
+  version checks.
+- Packaging artifacts expire after 14 days. Rebuild if artifacts have expired
+  or if their version is incorrect. Re-running only the publisher cannot
+  repair installers built with the wrong embedded version.
+- If packaging fails to determine the latest semantic-version Release, it
+  stops rather than guessing `v0.1.0`. Inspect the **Determine next release
+  version** step and the existing release tags.
+- Windows/Linux installer publication does not currently provide signed Tauri
+  updater artifacts. The macOS updater uses its own signed release assets.
+
+#### Publish macOS
+
+On a Mac with the existing Tauri signing key and public key configured,
+choose one of the following release modes.
+
+**Create a new macOS-only patch release:** from the intended source revision,
+run:
+
+```bash
+./scripts/upload-new-app.sh
+```
+
+The script normally increments the highest semantic version found in GitHub
+Releases or local Git tags. Check the selected version before publishing:
+
+```bash
+DEEPLOCAL_UPLOAD_DRY_RUN=1 ./scripts/upload-new-app.sh
+```
+
+**Add macOS assets to an existing Windows/Linux release:** use the *same
+commit* as the release tag, then explicitly select its version:
+
+```bash
+git fetch origin --tags
+git checkout vX.Y.Z
+DEEPLOCAL_RELEASE_VERSION=vX.Y.Z ./scripts/upload-new-app.sh
+```
+
+Replace `vX.Y.Z` with the actual existing tag. The script checks that
+`HEAD` matches that tag before uploading to an existing Release. It uploads
+the macOS ZIP and DMG, signed updater archive and signature, and
+`latest.json`. It does **not** replace existing assets; if a macOS asset
+with the same name already exists, resolve that conflict before retrying.
+
+**Release coordination:** to ship all platforms under one version, first
+publish Windows/Linux, then check out that exact release tag on the Mac and
+upload macOS assets with `DEEPLOCAL_RELEASE_VERSION`. A normal macOS upload
+without this override creates the next patch release instead. That is why
+Windows/Linux `v0.1.13` and macOS `v0.1.14` currently appear as separate
+releases. This split is acceptable temporarily, but keep the
+[platform download table](#install-the-packaged-app) up to date when versions
+diverge.
+
+#### Troubleshooting the release sequence
+
+- **Desktop packaging is missing from Actions:** check that
+  `.github/workflows/desktop-packaging.yml` exists on the default branch
+  and is valid YAML; malformed workflow files may not appear in the Actions
+  sidebar.
+- **Publisher reports an existing tag:** the downloaded installers were built
+  for an already published version. Fix the version calculation if necessary,
+  then run packaging again and publish the new artifacts.
+- **Publisher cannot find manifests or installers:** verify both packaging
+  jobs succeeded, their artifacts have not expired, and each artifact
+  includes `release-version.txt`.
+- **macOS upload fails because the commit differs:** check out the release
+  tag and rebuild on that exact commit. Do not force-upload binaries built
+  from a different revision.
+
 ```bash
 ./scripts/package-macos-app.sh
 ./scripts/upload-new-app.sh
