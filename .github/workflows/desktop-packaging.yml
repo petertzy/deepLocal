@@ -1,13 +1,6 @@
 name: Desktop packaging
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "apps/desktop/**"
-      - "scripts/package-linux-app.sh"
-      - "scripts/package-windows-app.ps1"
-      - ".github/workflows/desktop-packaging.yml"
   workflow_dispatch:
 
 permissions:
