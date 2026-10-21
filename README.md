@@ -25,6 +25,29 @@ model files to a remote service.
 
 ### Install the packaged app
 
+Desktop installers are currently published in separate releases by platform:
+
+| Platform | Version | Download |
+| --- | --- | --- |
+| Windows x64 | v0.1.13 | [Windows installer (.exe)](https://github.com/petertzy/deepLocal/releases/tag/v0.1.13) |
+| Linux x64 (Debian/Ubuntu) | v0.1.13 | [DEB package (.deb)](https://github.com/petertzy/deepLocal/releases/tag/v0.1.13) |
+| Linux x64 (portable) | v0.1.13 | [AppImage](https://github.com/petertzy/deepLocal/releases/tag/v0.1.13) |
+| macOS | v0.1.14 | [macOS release](https://github.com/petertzy/deepLocal/releases/tag/v0.1.14) |
+
+Open the linked release and select the installer for your operating system
+under **Assets**. Windows users should choose the `.exe` installer. Debian and
+Ubuntu users can install the `.deb` package; users of other Linux distributions
+may prefer the `.AppImage` file. The AppImage may require additional FUSE
+compatibility libraries on some distributions.
+
+**Release versions currently differ across platforms.** GitHub's
+[latest release](https://github.com/petertzy/deepLocal/releases/latest)
+points to the newest published release, not necessarily the newest installer
+for every operating system. In particular, v0.1.14 is the macOS release,
+while the Windows and Linux installers are available under v0.1.13.
+The Windows and Linux installers are intended for manual installation and do
+not currently provide signed Tauri in-app updates.
+
 Install the latest macOS app:
 
 ```bash
