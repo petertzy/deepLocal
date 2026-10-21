@@ -1,0 +1,96 @@
+name: Desktop packaging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+
+      - name: Download Linux llama.cpp runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, urllib.request
+          headers = {"User-Agent": "deepLocal-CI", "Accept": "application/vnd.github+json"}
+          request = urllib.request.Request("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10", headers=headers)
+          with urllib.request.urlopen(request) as response:
+              releases = json.load(response)
+          assets = [a for r in releases if not r["draft"] for a in r["assets"]]
+          matches = [a for a in assets if "ubuntu-x64" in a["name"].lower() and a["name"].endswith(".tar.gz")]
+          if not matches:
+              raise SystemExit("No compatible Linux llama.cpp release asset found")
+          url = matches[0]["browser_download_url"]
+          urllib.request.urlretrieve(url, "/tmp/llama-runtime.tar.gz")
+          PY
+          mkdir -p .tools/llama.cpp
+          tar -xzf /tmp/llama-runtime.tar.gz -C .tools/llama.cpp
+          server="$(find .tools/llama.cpp -type f -name llama-server -print -quit)"
+          test -n "$server"
+          chmod +x "$server"
+          echo "DEEPLOCAL_LLAMA_SERVER=$GITHUB_WORKSPACE/$server" >> "$GITHUB_ENV"
+
+      - name: Download Windows llama.cpp runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10' -Headers @{ 'User-Agent' = 'deepLocal-CI' }
+          $asset = $releases | Where-Object { -not $_.draft } | ForEach-Object { $_.assets } |
+            Where-Object { $_.name -match 'win-cpu-x64.*\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw 'No compatible Windows llama.cpp release asset found.' }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:RUNNER_TEMP\llama-runtime.zip"
+          New-Item -ItemType Directory -Force '.tools\llama.cpp' | Out-Null
+          Expand-Archive "$env:RUNNER_TEMP\llama-runtime.zip" '.tools\llama.cpp' -Force
+          $server = Get-ChildItem '.tools\llama.cpp' -Filter 'llama-server.exe' -Recurse | Select-Object -First 1
+          if (-not $server) { throw 'llama-server.exe was not found in the downloaded archive.' }
+          "DEEPLOCAL_LLAMA_SERVER=$($server.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/package-linux-app.sh
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows-app.ps1
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: deeplocal-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
