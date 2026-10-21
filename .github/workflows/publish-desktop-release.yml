@@ -2,22 +2,13 @@ name: Publish desktop release
 
 on:
   workflow_dispatch:
-    inputs:
-      run_id:
-        description: "Successful Desktop packaging workflow run ID"
-        required: true
-        type: string
-      release_tag:
-        description: "Existing GitHub Release tag (for example, v0.1.1)"
-        required: true
-        type: string
 
 permissions:
   actions: read
   contents: write
 
 concurrency:
-  group: desktop-release-${{ inputs.release_tag }}
+  group: desktop-release-manual
   cancel-in-progress: false
 
 jobs:
@@ -25,48 +16,41 @@ jobs:
     name: Publish Windows and Linux installers
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs and release
+      - name: Resolve matching build and release
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RUN_ID: ${{ inputs.run_id }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "Run ID must be numeric." >&2; exit 1; }
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || {
-            echo "Release tag must be a version such as v0.1.1." >&2
-            exit 1
-          }
-          gh release view "$RELEASE_TAG" --json tagName --jq '.tagName' >/dev/null
-          gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > "$RUNNER_TEMP/source-run.json"
-          jq -e --arg repo "$GH_REPO" '
-            .repository.full_name == $repo and
-            .name == "Desktop packaging" and
-            .event == "workflow_dispatch" and
-            .status == "completed" and
-            .conclusion == "success"
-          ' "$RUNNER_TEMP/source-run.json" >/dev/null || {
-            echo "The selected run is not a successful manual Desktop packaging run in this repository." >&2
-            exit 1
-          }
-          run_sha="$(jq -r '.head_sha' "$RUNNER_TEMP/source-run.json")"
-          tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
-          tag_type="$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.type')"
-          if [[ "$tag_type" == "tag" ]]; then
-            tag_sha="$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq '.object.sha')"
-          fi
-          [[ "$run_sha" == "$tag_sha" ]] || {
-            echo "Build commit does not match the release tag commit." >&2
-            exit 1
-          }
+          gh api --paginate "repos/$GH_REPO/actions/workflows/desktop-packaging.yml/runs?event=workflow_dispatch&status=success&per_page=100" --jq '.workflow_runs[] | [.id, .head_sha] | @tsv' > "$RUNNER_TEMP/build-runs.tsv"
+          gh release list --limit 1000 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName' > "$RUNNER_TEMP/release-tags.txt"
+          while IFS=$'\t' read -r run_id run_sha; do
+            [[ -n "$run_id" ]] || continue
+            while IFS= read -r tag; do
+              [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
+              ref_json="$(gh api "repos/$GH_REPO/git/ref/tags/$tag")"
+              tag_sha="$(jq -r '.object.sha' <<< "$ref_json")"
+              if [[ "$(jq -r '.object.type' <<< "$ref_json")" == "tag" ]]; then
+                tag_sha="$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq '.object.sha')"
+              fi
+              if [[ "$run_sha" == "$tag_sha" ]]; then
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+                echo "Selected build $run_id for release $tag ($run_sha)" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            done < "$RUNNER_TEMP/release-tags.txt"
+          done < "$RUNNER_TEMP/build-runs.tsv"
+          echo "No successful packaging run matches an existing published release tag." >&2
+          exit 1
 
       - name: Download packaging artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RUN_ID: ${{ inputs.run_id }}
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -96,7 +80,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
