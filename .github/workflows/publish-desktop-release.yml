@@ -1,0 +1,107 @@
+name: Publish desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Successful Desktop packaging workflow run ID"
+        required: true
+        type: string
+      release_tag:
+        description: "Existing GitHub Release tag (for example, v0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Windows and Linux installers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "Run ID must be numeric." >&2; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || {
+            echo "Release tag must be a version such as v0.1.1." >&2
+            exit 1
+          }
+          gh release view "$RELEASE_TAG" --json tagName --jq '.tagName' >/dev/null
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          jq -e --arg repo "$GH_REPO" '
+            .repository.full_name == $repo and
+            .name == "Desktop packaging" and
+            .event == "workflow_dispatch" and
+            .status == "completed" and
+            .conclusion == "success"
+          ' "$RUNNER_TEMP/source-run.json" >/dev/null || {
+            echo "The selected run is not a successful manual Desktop packaging run in this repository." >&2
+            exit 1
+          }
+          run_sha="$(jq -r '.head_sha' "$RUNNER_TEMP/source-run.json")"
+          tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
+          tag_type="$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.type')"
+          if [[ "$tag_type" == "tag" ]]; then
+            tag_sha="$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq '.object.sha')"
+          fi
+          [[ "$run_sha" == "$tag_sha" ]] || {
+            echo "Build commit does not match the release tag commit." >&2
+            exit 1
+          }
+
+      - name: Download packaging artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/installers"
+          gh run download "$RUN_ID" --repo "$GH_REPO" --dir "$RUNNER_TEMP/installers"
+
+      - name: Validate installer files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/installers"
+          mapfile -d '' files < <(find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
+          (("${#files[@]}" > 0)) || { echo "No installer files were downloaded." >&2; exit 1; }
+          find . -type f | sort
+          find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -exec sha256sum {} +
+          test "$(find . -type f -name '*.exe' | wc -l)" -gt 0 || { echo "Windows installer is missing." >&2; exit 1; }
+          test "$(find . -type f -name '*.deb' | wc -l)" -gt 0 || { echo "Linux DEB is missing." >&2; exit 1; }
+          test "$(find . -type f -name '*.AppImage' | wc -l)" -gt 0 || { echo "Linux AppImage is missing." >&2; exit 1; }
+          mkdir -p "$RUNNER_TEMP/upload"
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            [[ ! -e "$RUNNER_TEMP/upload/$name" ]] || { echo "Duplicate installer filename: $name" >&2; exit 1; }
+            cp "$file" "$RUNNER_TEMP/upload/$name"
+          done
+
+      - name: Upload installers to existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/upload/*)
+          (("${#files[@]}" > 0)) || exit 1
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO"
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
