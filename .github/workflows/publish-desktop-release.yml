@@ -43,7 +43,13 @@ jobs:
               fi
             done < "$RUNNER_TEMP/release-tags.txt"
           done < "$RUNNER_TEMP/build-runs.tsv"
-          echo "No successful packaging run matches an existing published release tag." >&2
+          echo "::error::No successful packaging run matches an existing published release tag."
+          echo "Successful packaging runs:" >&2
+          head -n 10 "$RUNNER_TEMP/build-runs.tsv" >&2
+          echo "Published release tags:" >&2
+          head -n 20 "$RUNNER_TEMP/release-tags.txt" >&2
+          echo "Create a release tag at the packaging run commit, or run Desktop packaging on the commit of an existing release tag." >&2
+          echo "The publishing workflow will not silently attach binaries built from a different commit." >&2
           exit 1
 
       - name: Download packaging artifacts
