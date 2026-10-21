@@ -27,6 +27,7 @@ $configPath = Join-Path ([IO.Path]::GetTempPath()) ("deeplocal-tauri-" + [guid]:
 try {
     $config = Get-Content (Join-Path $desktop 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
     $config.bundle.targets = @('nsis')
+    if ($env:DEEPLOCAL_RELEASE_VERSION) { $config.version = $env:DEEPLOCAL_RELEASE_VERSION.TrimStart('v') }
     if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
         $config.bundle.createUpdaterArtifacts = $false
         $config.plugins.PSObject.Properties.Remove('updater')

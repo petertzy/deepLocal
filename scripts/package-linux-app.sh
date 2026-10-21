@@ -46,6 +46,7 @@ const fs = require('fs');
 const [source, target] = process.argv.slice(2);
 const config = JSON.parse(fs.readFileSync(source, 'utf8'));
 config.bundle.targets = ['deb', 'appimage'];
+if (process.env.DEEPLOCAL_RELEASE_VERSION) config.version = process.env.DEEPLOCAL_RELEASE_VERSION.replace(/^v/, '');
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
   config.bundle.createUpdaterArtifacts = false;
   delete config.plugins?.updater;

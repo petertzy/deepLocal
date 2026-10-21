@@ -16,7 +16,7 @@ jobs:
     name: Publish Windows and Linux installers
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve matching build and release
+      - name: Select latest successful packaging run
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -24,33 +24,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api --paginate "repos/$GH_REPO/actions/workflows/desktop-packaging.yml/runs?event=workflow_dispatch&status=success&per_page=100" --jq '.workflow_runs[] | [.id, .head_sha] | @tsv' > "$RUNNER_TEMP/build-runs.tsv"
-          gh release list --limit 1000 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName' > "$RUNNER_TEMP/release-tags.txt"
-          while IFS=$'\t' read -r run_id run_sha; do
-            [[ -n "$run_id" ]] || continue
-            while IFS= read -r tag; do
-              [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
-              ref_json="$(gh api "repos/$GH_REPO/git/ref/tags/$tag")"
-              tag_sha="$(jq -r '.object.sha' <<< "$ref_json")"
-              if [[ "$(jq -r '.object.type' <<< "$ref_json")" == "tag" ]]; then
-                tag_sha="$(gh api "repos/$GH_REPO/git/tags/$tag_sha" --jq '.object.sha')"
-              fi
-              if [[ "$run_sha" == "$tag_sha" ]]; then
-                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-                echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
-                echo "Selected build $run_id for release $tag ($run_sha)" >> "$GITHUB_STEP_SUMMARY"
-                exit 0
-              fi
-            done < "$RUNNER_TEMP/release-tags.txt"
-          done < "$RUNNER_TEMP/build-runs.tsv"
-          echo "::error::No successful packaging run matches an existing published release tag."
-          echo "Successful packaging runs:" >&2
-          head -n 10 "$RUNNER_TEMP/build-runs.tsv" >&2
-          echo "Published release tags:" >&2
-          head -n 20 "$RUNNER_TEMP/release-tags.txt" >&2
-          echo "Create a release tag at the packaging run commit, or run Desktop packaging on the commit of an existing release tag." >&2
-          echo "The publishing workflow will not silently attach binaries built from a different commit." >&2
-          exit 1
+          gh api "repos/$GH_REPO/actions/workflows/desktop-packaging.yml/runs?event=workflow_dispatch&status=success&per_page=100" > "$RUNNER_TEMP/runs.json"
+          run_id="$(jq -r '.workflow_runs[0].id // empty' "$RUNNER_TEMP/runs.json")"
+          run_sha="$(jq -r '.workflow_runs[0].head_sha // empty' "$RUNNER_TEMP/runs.json")"
+          [[ -n "$run_id" && -n "$run_sha" ]] || { echo "No successful packaging run found." >&2; exit 1; }
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_sha=$run_sha" >> "$GITHUB_OUTPUT"
 
       - name: Download packaging artifacts
         env:
@@ -62,6 +41,31 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/installers"
           gh run download "$RUN_ID" --repo "$GH_REPO" --dir "$RUNNER_TEMP/installers"
+
+      - name: Resolve packaged version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_SHA: ${{ steps.resolve.outputs.run_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t manifests < <(find "$RUNNER_TEMP/installers" -name release-version.txt -type f)
+          [[ "${#manifests[@]}" == 2 ]] || { echo "Expected two version manifests." >&2; exit 1; }
+          version="$(cat "${manifests[0]}")"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          [[ "$(cat "${manifests[1]}")" == "$version" ]] || { echo "Package versions differ." >&2; exit 1; }
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists. Refusing to overwrite it." >&2
+            exit 1
+          fi
+          if gh api "repos/$GH_REPO/git/ref/tags/$version" >/dev/null 2>&1; then
+            echo "Tag $version already exists. Refusing to overwrite it." >&2
+            exit 1
+          fi
+          echo "release_tag=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing $version from commit $RUN_SHA" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate installer files
         shell: bash
@@ -86,12 +90,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           files=("$RUNNER_TEMP"/upload/*)
           (("${#files[@]}" > 0)) || exit 1
-          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO"
+          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Windows and Linux desktop installers. macOS packages can be added separately."
           gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
