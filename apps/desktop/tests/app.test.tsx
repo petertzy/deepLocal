@@ -715,4 +715,91 @@ describe("core frontend flows", () => {
       expect.objectContaining({ role: "system", content: expect.stringContaining(preset.system_prompt) }),
     ]));
   });
+
+  // Issue #83 preview regression tests
+  it("opens an indexed document preview and highlights literal search matches", async () => {
+    const state: Record<string, unknown> = apiState({
+      documents: [{
+        id: "document-1",
+        name: "preview-notes.txt",
+        source_key: "preview-notes.txt",
+        character_count: 23,
+        chunk_count: 1,
+        created_at: "2026-10-28T00:00:00.000Z",
+        updated_at: "2026-10-28T00:00:00.000Z",
+      }],
+    });
+    state["/runtime/documents/document-1/content"] = {
+      name: "preview-notes.txt",
+      content: "alpha a.b beta a.b",
+    };
+
+    const fetchMock = installFetch(state);
+    render(<App />);
+    await navigate("Documents");
+
+    await userEvent.click(await screen.findByRole("button", { name: /preview/i }));
+    expect(await screen.findByText("alpha a.b beta a.b")).toBeTruthy();
+
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes("/runtime/documents/document-1/content")
+    )).toBe(true);
+
+    const searchInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label*="search" i], input[placeholder*="search" i]'
+    );
+    expect(searchInput).not.toBeNull();
+
+    await userEvent.type(searchInput!, "a.b");
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".documentPreviewMatch")).toHaveLength(2);
+    });
+
+    expect(document.querySelectorAll(".documentPreviewMatchActive")).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Next search match" }));
+
+    await waitFor(() => {
+      const matches = document.querySelectorAll(".documentPreviewMatch");
+      expect(matches).toHaveLength(2);
+      expect(matches[1].classList.contains("documentPreviewMatchActive")).toBe(true);
+    });
+  });
+
+  it("shows an accessible error when the indexed document preview request fails", async () => {
+    const state: Record<string, unknown> = apiState({
+      documents: [{
+        id: "document-1",
+        name: "unavailable.txt",
+        source_key: "unavailable.txt",
+        character_count: 10,
+        chunk_count: 1,
+        created_at: "2026-10-28T00:00:00.000Z",
+        updated_at: "2026-10-28T00:00:00.000Z",
+      }],
+    });
+    state["/runtime/documents/document-1/content"] = {
+      error: "Preview unavailable",
+    };
+
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const path = new URL(url, "http://127.0.0.1:14567").pathname;
+
+      if (path === "/runtime/documents/document-1/content") {
+        return jsonResponse({ error: "Preview unavailable" }, false);
+      }
+
+      return jsonResponse(state[path] ?? []);
+    });
+
+    render(<App />);
+    await navigate("Documents");
+    await userEvent.click(await screen.findByRole("button", { name: /preview/i }));
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+  });
+
 });

@@ -2185,3 +2185,150 @@ label {
     height: 42px;
   }
 }
+
+
+/* Issue #83: read-only indexed document preview */
+.documentPreviewOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.documentPreviewDialog {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 100%);
+  max-height: min(85vh, 900px);
+  overflow: hidden;
+  border: 1px solid var(--border, #dbe2ea);
+  border-radius: 16px;
+  background: var(--surface, #fff);
+  color: var(--text, #172033);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
+}
+
+.documentPreviewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border, #dbe2ea);
+}
+
+.documentPreviewHeader h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.documentPreviewHeader p {
+  margin: 6px 0 0;
+  color: var(--muted, #64748b);
+  font-size: 13px;
+}
+
+.documentPreviewSearch {
+  display: grid;
+  gap: 8px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border, #dbe2ea);
+}
+
+.documentPreviewSearch > label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.documentPreviewSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border, #dbe2ea);
+  border-radius: 9px;
+}
+
+.documentPreviewSearchRow input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+}
+
+.documentPreviewSearchRow span {
+  white-space: nowrap;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+}
+
+.documentPreviewNavigation {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.documentPreviewNavigation button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.documentPreviewBody {
+  min-height: 160px;
+  overflow: auto;
+  padding: 20px 22px;
+}
+
+.documentPreviewBody pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.documentPreviewMessage,
+.documentPreviewError {
+  margin: 0;
+  padding: 16px 0;
+  color: var(--muted, #64748b);
+}
+
+.documentPreviewError {
+  color: #b42318;
+}
+
+.documentPreviewMatch {
+  border-radius: 3px;
+  background: #fff0a8;
+  color: #332500;
+}
+
+.documentPreviewMatchActive {
+  outline: 2px solid #b7791f;
+  background: #ffd45a;
+}
+
+@media (max-width: 600px) {
+  .documentPreviewOverlay {
+    padding: 8px;
+  }
+
+  .documentPreviewDialog {
+    max-height: 94vh;
+    border-radius: 12px;
+  }
+
+  .documentPreviewHeader,
+  .documentPreviewSearch,
+  .documentPreviewBody {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}

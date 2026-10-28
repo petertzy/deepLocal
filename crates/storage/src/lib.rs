@@ -3,7 +3,7 @@ use deeplocal_core::{
     ChatMessage, ChatRole, ChatSession, DocumentChunk, DownloadJob, GenerationParameters,
     IndexedDocumentChunk, LocalDocument, ModelDescriptor, PromptPreset,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -404,6 +404,35 @@ impl Storage {
         )? > 0)
     }
 
+    /// Returns the indexed text for one document without changing the index.
+    pub fn get_document_content(&self, id: Uuid) -> anyhow::Result<Option<(String, String)>> {
+        let name = self
+            .conn
+            .query_row(
+                "select name from local_documents where id = ?1",
+                params![id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let Some(name) = name else {
+            return Ok(None);
+        };
+
+        let mut statement = self.conn.prepare(
+            "select content from document_chunks
+             where document_id = ?1
+             order by chunk_index asc",
+        )?;
+        let rows = statement.query_map(params![id.to_string()], |row| row.get::<_, String>(0))?;
+
+        let mut content = String::new();
+        for row in rows {
+            content.push_str(&row?);
+        }
+
+        Ok(Some((name, content)))
+    }
     pub fn list_indexed_document_chunks(&self) -> anyhow::Result<Vec<IndexedDocumentChunk>> {
         let mut statement = self.conn.prepare(
             "select chunks.id, chunks.document_id, documents.name, chunks.chunk_index, chunks.content, chunks.embedding

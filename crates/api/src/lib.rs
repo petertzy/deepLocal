@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{
         IntoResponse,
@@ -22,7 +22,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     env,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path as FsPath, PathBuf},
     process::Command,
     sync::Arc,
     time::{Duration, Instant},
@@ -145,6 +145,7 @@ fn router_with_storage(
         .route("/runtime/chat/presets/delete", post(delete_prompt_preset))
         .route("/runtime/chat/messages", post(append_chat_message))
         .route("/runtime/documents", get(documents).post(ingest_document))
+        .route("/runtime/documents/{id}/content", get(document_content))
         .route("/runtime/documents/delete", post(delete_document))
         .route("/runtime/documents/search", post(search_documents))
         .route("/runtime/models/directory", get(models_directory))
@@ -307,7 +308,7 @@ async fn import_model(
     }
 }
 
-fn validate_import_gguf(path: &Path) -> Result<(), &'static str> {
+fn validate_import_gguf(path: &FsPath) -> Result<(), &'static str> {
     if !is_gguf_path(path) {
         return Err("Choose a file with the .gguf extension.");
     }
@@ -331,9 +332,9 @@ fn validate_import_gguf(path: &Path) -> Result<(), &'static str> {
 }
 
 fn import_destination(
-    models_directory: &Path,
+    models_directory: &FsPath,
     model_id: &str,
-    source: &Path,
+    source: &FsPath,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(models_directory)?;
     let safe_id: String = model_id
@@ -369,7 +370,7 @@ fn import_destination(
     unreachable!()
 }
 
-fn copy_model_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+fn copy_model_file(source: &FsPath, destination: &FsPath) -> std::io::Result<()> {
     use std::io::Write;
 
     let mut input = std::fs::File::open(source)?;
@@ -1165,6 +1166,106 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn document_content_endpoint_returns_reconstructed_content() {
+        let storage = Storage::open_memory().expect("open in-memory storage");
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            std::env::temp_dir().join(format!("deeplocal-doc-preview-{}", Uuid::new_v4())),
+            storage,
+        );
+
+        let ingest = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/documents",
+                serde_json::json!({
+                    "name": "preview-regression.md",
+                    "content": "First preview paragraph.\\nSecond preview paragraph.",
+                    "source_key": "test:preview-regression"
+                }),
+            ))
+            .await
+            .expect("ingest preview document");
+
+        assert_eq!(ingest.status(), StatusCode::CREATED);
+        let document = response_json(ingest).await;
+        let id = document["id"].as_str().expect("ingested document id");
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/runtime/documents/{id}/content"))
+                    .body(Body::empty())
+                    .expect("build preview request"),
+            )
+            .await
+            .expect("request document preview");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["name"], "preview-regression.md");
+        assert!(
+            body["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("First preview paragraph."),
+            "preview should include the first paragraph: {body}"
+        );
+        assert!(
+            body["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Second preview paragraph."),
+            "preview should include the second paragraph: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_content_endpoint_rejects_invalid_uuid() {
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            std::env::temp_dir().join(format!("deeplocal-doc-preview-{}", Uuid::new_v4())),
+            Storage::open_memory().expect("open in-memory storage"),
+        );
+
+        let response = app
+            .oneshot(
+                Request::get("/runtime/documents/not-a-uuid/content")
+                    .body(Body::empty())
+                    .expect("build invalid-id request"),
+            )
+            .await
+            .expect("request invalid document id");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn document_content_endpoint_returns_not_found_for_missing_document() {
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            std::env::temp_dir().join(format!("deeplocal-doc-preview-{}", Uuid::new_v4())),
+            Storage::open_memory().expect("open in-memory storage"),
+        );
+
+        let missing_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::get(format!("/runtime/documents/{missing_id}/content"))
+                    .body(Body::empty())
+                    .expect("build missing-document request"),
+            )
+            .await
+            .expect("request missing document");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
     #[tokio::test]
     async fn health_endpoint_reports_healthy_service() {
         let app = super::router_with_cors(RuntimeManager::default(), false);
@@ -2203,12 +2304,12 @@ fn unique_model_id(base_id: &str, used_ids: &mut std::collections::HashSet<Strin
     unreachable!("unbounded model id suffix search should always find a free id")
 }
 
-fn is_inside_models_root(path: &str, models_root: &Path) -> bool {
+fn is_inside_models_root(path: &str, models_root: &FsPath) -> bool {
     let path = absolute_path(PathBuf::from(path));
     path.starts_with(models_root)
 }
 
-fn remove_empty_models_subdirectory(path: &str, models_root: &Path) -> std::io::Result<bool> {
+fn remove_empty_models_subdirectory(path: &str, models_root: &FsPath) -> std::io::Result<bool> {
     let path = absolute_path(PathBuf::from(path));
     let Some(parent) = path.parent() else {
         return Ok(false);
@@ -3014,6 +3115,28 @@ async fn documents(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
     }
 }
 
+async fn document_content(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "invalid document id").into_response();
+        }
+    };
+
+    let storage = state.storage.lock().await;
+    match storage.get_document_content(id) {
+        Ok(Some((name, content))) => Json(serde_json::json!({
+            "name": name,
+            "content": content,
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "document not found").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
 async fn ingest_document(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<IngestDocumentRequest>,
@@ -3148,7 +3271,7 @@ async fn search_documents(
 }
 
 fn is_supported_document_name(name: &str) -> bool {
-    let extension = Path::new(name)
+    let extension = FsPath::new(name)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default()

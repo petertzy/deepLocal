@@ -1809,6 +1809,60 @@ function Documents({
   const [isIngesting, setIsIngesting] = useState(false);
   const [removingDocument, setRemovingDocument] = useState<LocalDocument | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<LocalDocument | null>(null);
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewQuery, setPreviewQuery] = useState("");
+  const [previewMatchIndex, setPreviewMatchIndex] = useState(0);
+
+  const previewMatches = useMemo(() => {
+    const query = previewQuery.trim();
+    if (!query) return [];
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return Array.from(previewContent.matchAll(new RegExp(escaped, "gi")));
+  }, [previewContent, previewQuery]);
+
+  async function openDocumentPreview(document: LocalDocument) {
+    setPreviewDocument(document);
+    setPreviewContent("");
+    setPreviewQuery("");
+    setPreviewMatchIndex(0);
+    setPreviewError("");
+    setPreviewLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/runtime/documents/${encodeURIComponent(document.id)}/content`,
+      );
+      if (!response.ok) {
+        throw new Error((await response.text()) || "Could not load this indexed document.");
+      }
+      const payload = await response.json() as { name?: string; content?: string };
+      if (typeof payload.content !== "string") {
+        throw new Error("The preview response did not contain document text.");
+      }
+      setPreviewContent(payload.content);
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : "Could not load this indexed document.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function closeDocumentPreview() {
+    setPreviewDocument(null);
+    setPreviewContent("");
+    setPreviewQuery("");
+    setPreviewError("");
+    setPreviewMatchIndex(0);
+  }
+
+  function movePreviewMatch(direction: -1 | 1) {
+    if (!previewMatches.length) return;
+    setPreviewMatchIndex((current) =>
+      (current + direction + previewMatches.length) % previewMatches.length
+    );
+  }
 
   async function ingestDocument(upload: LocalDocumentUpload) {
     const response = await fetch(`${API_BASE}/runtime/documents`, {
@@ -1939,6 +1993,10 @@ function Documents({
                 <span>{document.chunk_count} chunks · {formatDocumentCharacters(document.character_count)}</span>
               </div>
               <div className="documentActions">
+                <button className="secondaryAction" onClick={() => openDocumentPreview(document)}>
+                  <Search size={15} />
+                  Preview
+                </button>
                 <button className="secondaryAction" onClick={onOpenChat}>
                   <MessageSquare size={15} />
                   Chat
@@ -1959,6 +2017,110 @@ function Documents({
           actionLabel="Add documents"
           onAction={chooseDocuments}
         />
+      )}
+      {previewDocument && (
+        <div className="documentPreviewOverlay">
+          <section
+            className="documentPreviewDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="document-preview-title"
+          >
+            <header className="documentPreviewHeader">
+              <div>
+                <h2 id="document-preview-title">{previewDocument.name}</h2>
+                <p>Read-only indexed document preview</p>
+              </div>
+              <button
+                type="button"
+                className="iconButton"
+                aria-label="Close document preview"
+                onClick={closeDocumentPreview}
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="documentPreviewSearch">
+              <label htmlFor="document-preview-search">Find in document</label>
+              <div className="documentPreviewSearchRow">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  id="document-preview-search"
+                  type="search"
+                  placeholder="Search text (case-insensitive)"
+                  value={previewQuery}
+                  onChange={(event) => {
+                    setPreviewQuery(event.target.value);
+                    setPreviewMatchIndex(0);
+                  }}
+                />
+                <span aria-live="polite">
+                  {previewQuery.trim()
+                    ? `${previewMatches.length ? previewMatchIndex + 1 : 0} of ${previewMatches.length}`
+                    : "Search"}
+                </span>
+              </div>
+              <div className="documentPreviewNavigation">
+                <button
+                  type="button"
+                  className="secondaryAction"
+                  onClick={() => movePreviewMatch(-1)}
+                  disabled={!previewMatches.length}
+                  aria-label="Previous search match"
+                >
+                  <ArrowLeft size={15} /> Previous
+                </button>
+                <button
+                  type="button"
+                  className="secondaryAction"
+                  onClick={() => movePreviewMatch(1)}
+                  disabled={!previewMatches.length}
+                  aria-label="Next search match"
+                >
+                  Next <ArrowRight size={15} />
+                </button>
+              </div>
+            </div>
+
+            <div className="documentPreviewBody" aria-busy={previewLoading}>
+              {previewLoading ? (
+                <p className="documentPreviewMessage">Loading indexed document…</p>
+              ) : previewError ? (
+                <p className="documentPreviewError" role="alert">{previewError}</p>
+              ) : !previewContent.length ? (
+                <p className="documentPreviewMessage">This indexed document is empty.</p>
+              ) : previewQuery.trim() && !previewMatches.length ? (
+                <>
+                  <p className="documentPreviewMessage">No matches found for “{previewQuery.trim()}”.</p>
+                  <pre>{previewContent}</pre>
+                </>
+              ) : (
+                <pre>{(() => {
+                  const query = previewQuery.trim();
+                  if (!query) return previewContent;
+                  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                  const parts = previewContent.split(new RegExp(`(${escaped})`, "gi"));
+                  let matchNumber = 0;
+                  return parts.map((part, index) => {
+                    if (part.toLowerCase() !== query.toLowerCase()) return part;
+                    const active = matchNumber === previewMatchIndex;
+                    matchNumber += 1;
+                    return (
+                      <mark
+                        className={active ? "documentPreviewMatch documentPreviewMatchActive" : "documentPreviewMatch"}
+                        key={`${index}-${matchNumber}`}
+                        data-preview-match={matchNumber - 1}
+                      >
+                        {part}
+                      </mark>
+                    );
+                  });
+                })()}</pre>
+              )}
+            </div>
+          </section>
+        </div>
       )}
       {removingDocument && (
         <ConfirmationDialog
