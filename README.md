@@ -16,14 +16,11 @@ model files to a remote service.
 - Store downloaded models under `./models/`.
 - Load local GGUF models through `llama.cpp`.
 - Chat with loaded models in the browser UI.
-- Index local text documents and retrieve relevant excerpts during chat.
 - Render Markdown responses in chat.
-- Expose an OpenAI-compatible local API at `http://127.0.0.1:14567/v1` in development.
+- Expose an OpenAI-compatible local API at `http://127.0.0.1:14567/v1`.
 - Keep Hugging Face tokens local to your machine.
 
 ## Quick Start
-
-### Install the packaged app
 
 Install the latest macOS app:
 
@@ -35,25 +32,6 @@ The installer downloads the latest GitHub Release, installs `deepLocal.app` to
 `/Applications`, removes the macOS quarantine marker when possible, and opens
 the app. macOS may ask for administrator permission when replacing or copying
 the app into `/Applications`.
-
-### If macOS blocks the downloaded app
-
-Current public macOS builds may not be notarized. Only use this workaround if
-you downloaded deepLocal from the official
-[deepLocal GitHub Releases](https://github.com/petertzy/deepLocal/releases) page
-and trust that build. Move `deepLocal.app` to `/Applications`, then remove its
-quarantine attribute in Terminal:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/deepLocal.app"
-```
-
-This removes Gatekeeper's download quarantine marker from this app bundle. It
-does not notarize or code-sign the app. If you are unsure whether the download
-is authentic, do not run this command; verify the release and its published
-SHA-256 checksum first.
-
-### Run from source
 
 From the project root on macOS or Linux:
 
@@ -105,33 +83,35 @@ http://127.0.0.1:5173/
 The script starts both the backend and frontend and installs missing local
 development dependencies on its first run.
 
-For the full list of helper scripts grouped by purpose, see [Scripts](#scripts).
+Useful commands:
 
-## Document Chat
-
-Open **Documents** and add local `.txt`, `.md`, `.markdown`, `.rst`, `.csv`,
-`.json`, `.yaml`, `.yml`, `.html`, `.htm`, or `.log` files. deepLocal chunks
-the readable text, creates deterministic local vectors, and stores both the
-chunks and vectors in its local SQLite database. No document content or
-embeddings are sent to a remote service.
-
-In **Chat**, the **Documents** control is enabled when the local index contains
-files. When enabled, deepLocal retrieves the most relevant excerpts for each
-question before sending it to the loaded model. Turn that control off for a
-normal model-only chat. Removing an item from **Documents** removes its local
-index entries but never deletes the original file.
-
-The local runtime also exposes document endpoints for integrations:
-
-```text
-GET  /runtime/documents
-POST /runtime/documents
-POST /runtime/documents/search
-POST /runtime/documents/delete
+```bash
+./scripts/start-dev.sh --restart
+./scripts/start-dev.sh --stop
+./scripts/start-dev.sh --build
+./scripts/install-macos.sh
+./scripts/package-macos-app.sh
+./scripts/uninstall-local.sh
+DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
 
-`POST /v1/chat/completions` uses indexed documents by default. Set
-`"use_documents": false` in a request to disable retrieval for that completion.
+Windows commands:
+
+```powershell
+.\scripts\start-dev.cmd -Restart
+.\scripts\start-dev.cmd -Stop
+.\scripts\start-dev.cmd -Build
+```
+
+You can also run the PowerShell script directly when local script execution is
+enabled:
+
+```powershell
+.\scripts\start-dev.ps1
+```
+
+Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
+`llama.cpp` after cleaning local project artifacts.
 
 ## Packaging A macOS App
 
@@ -140,11 +120,6 @@ Build a shareable Tauri macOS app from the project root:
 ```bash
 ./scripts/package-macos-app.sh
 ```
-
-For local packaging/testing, this command builds an unsigned app when
-`TAURI_SIGNING_PRIVATE_KEY` is not set. The local build intentionally skips
-updater artifacts. Use `./scripts/upload-new-app.sh` with the signing variables
-configured when creating a release that supports in-app updates.
 
 The script creates:
 
@@ -158,14 +133,6 @@ creates `dist/deepLocal-macos.dmg`.
 
 The packaged app is a native Tauri shell around the existing React UI. It starts
 the local Rust API inside the app process instead of opening a browser window.
-Release builds bundle the llama.cpp runtime at
-`deepLocal.app/Contents/Resources/llama-runtime/`, including `llama-server` and
-its macOS `.dylib` dependencies. The packaged app prefers this bundled runtime,
-so a clean Mac does not need Homebrew or a separately installed `llama-server`.
-Packaged builds bind the API to `127.0.0.1` on an operating-system-assigned
-ephemeral port, while development servers continue to use `14567`. The app
-passes the assigned port to the UI at startup, so it does not reserve or reuse a
-fixed packaged-app port.
 When `LLAMA_SERVER` or `DEEPLOCAL_LLAMA_SERVER` is set, deepLocal uses that
 binary. On macOS, the app also checks the common Homebrew locations
 `/opt/homebrew/bin/llama-server` and `/usr/local/bin/llama-server`.
@@ -180,63 +147,6 @@ That folder contains the SQLite database, logs, and downloaded models. The app
 still binds only to `127.0.0.1` by default. Release builds are unsigned unless
 you configure Apple Developer signing and notarization, so macOS Gatekeeper may
 warn on first launch.
-
-### Updating the packaged app
-
-Packaged builds include the Tauri updater. From the **Settings** tab, choose
-**Check for updates** to check the latest GitHub Release and download/install a
-new signed app bundle without manually deleting the existing app. The updater
-uses this endpoint:
-
-```text
-https://github.com/petertzy/deepLocal/releases/latest/download/latest.json
-```
-
-Updater artifacts must be signed. Before publishing, generate a Tauri signing
-key once and keep the private key outside the repository:
-
-```bash
-cd apps/desktop
-npm run tauri signer generate -w ~/.tauri/deepLocal.key
-```
-
-The command writes the private key to:
-
-```text
-~/.tauri/deepLocal.key
-```
-
-and writes the matching public key to:
-
-```text
-~/.tauri/deepLocal.key.pub
-```
-
-Do not commit either file. The repository ignores `*.key` and `*.key.pub`.
-
-Configure these environment variables when running the release script:
-
-```bash
-export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/deepLocal.key)"
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="..." # if the key has a password
-export TAURI_UPDATER_PUBLIC_KEY="$(cat ~/.tauri/deepLocal.key.pub)"
-./scripts/upload-new-app.sh
-```
-
-Alternatively, the release script automatically reads those two default files,
-so after generating the key you can simply run:
-
-```bash
-./scripts/upload-new-app.sh
-```
-
-Custom locations are supported with `TAURI_SIGNING_PRIVATE_KEY_FILE` and
-`TAURI_UPDATER_PUBLIC_KEY_FILE`. The private key can also be supplied directly
-through `TAURI_SIGNING_PRIVATE_KEY` (for example, from a CI secret).
-
-The release script uploads the `.app.tar.gz`, `.sig`, and `latest.json` updater
-artifacts in addition to the ZIP and DMG. Without the signing key and public key,
-the script refuses to publish because an unsigned updater would not be safe.
 
 ## Requirements
 
@@ -279,16 +189,11 @@ desktop use. deepLocal prints a warning when public binding is enabled.
 
 ## Local API
 
-Development base URL:
+Base URL:
 
 ```text
 http://127.0.0.1:14567/v1
 ```
-
-Packaged app base URL: the app assigns an available `127.0.0.1` port at startup;
-it is intentionally not fixed and is not part of the public API contract. Copy
-the actual base URL shown on the app's **Server** page when using the packaged
-app. The fixed URL above is for development mode.
 
 Endpoints:
 
@@ -310,25 +215,7 @@ curl http://127.0.0.1:14567/v1/chat/completions \
   }'
 ```
 
-For incremental output, set `stream` to `true` and keep curl running with
-`-N`. Each `data:` event is an OpenAI-compatible completion chunk; a successful
-request ends with a finish chunk followed by `data: [DONE]`. Errors that happen
-after streaming starts are sent as an SSE `data:` error event, while errors
-before the stream starts use the normal HTTP error response.
-
-```bash
-curl -N http://127.0.0.1:14567/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{
-    "model": "your-loaded-model-id",
-    "stream": true,
-    "messages": [{ "role": "user", "content": "Explain deepLocal in one sentence." }]
-  }'
-```
-
-Load a model in the UI first, then use its model ID in API calls. Find and copy
-the exact ID on the **Server** page; model IDs are not necessarily the model's
-display name.
+Load a model in the UI first, then use that model ID in API calls.
 
 Python with the OpenAI SDK:
 
@@ -369,24 +256,6 @@ const response = await client.chat.completions.create({
 
 console.log(response.choices[0]?.message?.content);
 ```
-
-### Troubleshooting Connection Errors
-
-- **Connection refused / failed to fetch:** Make sure deepLocal is running and
-  its local API is online. In development, start it with `./scripts/start-dev.sh`.
-  In the packaged app, use the base URL displayed on the **Server** page because
-  its port is assigned dynamically.
-- **The health check does not respond:** For the development server, run
-  `curl http://127.0.0.1:14567/health`. If it fails, restart deepLocal and check
-  the backend terminal output or the app's **Server** page for its status.
-- **The request reaches the API but returns an error:** Check that the model is
-  loaded and that the `model` value exactly matches an ID shown on the
-  **Server** page. `GET /v1/models` lists the models currently available to API
-  clients.
-- **A client on another computer cannot connect:** The API binds to
-  `127.0.0.1` by default and accepts local connections only. LAN access requires
-  explicitly changing the host binding; see [Network Access](#network-access)
-  and only enable it on a trusted network.
 
 ## Hugging Face Access
 
@@ -450,64 +319,6 @@ config/         Example runtime configuration
 scripts/        Development helper scripts
 ```
 
-## Scripts
-
-Helper scripts grouped by purpose. See [Project Layout](#project-layout) for where
-they live.
-
-### Developing
-
-```bash
-./scripts/start-dev.sh --restart
-./scripts/start-dev.sh --stop
-./scripts/start-dev.sh --build
-DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
-```
-
-```powershell
-.\scripts\start-dev.cmd -Restart
-.\scripts\start-dev.cmd -Stop
-.\scripts\start-dev.cmd -Build
-```
-
-You can also run the PowerShell script directly when local script execution is
-enabled:
-
-```powershell
-.\scripts\start-dev.ps1
-```
-
-### Packaging and releases
-
-```bash
-./scripts/package-macos-app.sh
-./scripts/upload-new-app.sh
-```
-
-`upload-new-app.sh` automatically increments the patch version from the latest
-GitHub release or local Git tag. To explicitly choose a version, set
-`DEEPLOCAL_RELEASE_VERSION`, for example:
-
-```bash
-DEEPLOCAL_RELEASE_VERSION=v0.1.3 ./scripts/upload-new-app.sh
-```
-
-To preview the automatically selected version without building or uploading:
-
-```bash
-DEEPLOCAL_UPLOAD_DRY_RUN=1 ./scripts/upload-new-app.sh
-```
-
-### Installing and cleaning up
-
-```bash
-./scripts/install-macos.sh
-./scripts/uninstall-local.sh
-```
-
-Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
-`llama.cpp` after cleaning local project artifacts.
-
 ## Contributing
 
 Contributions are welcome. A good first path is:
@@ -520,33 +331,13 @@ Contributions are welcome. A good first path is:
 Useful local checks:
 
 ```bash
-./scripts/check.sh
+cargo check
+cargo test
+./scripts/start-dev.sh --build
 ```
-
-Formatting commands:
-
-```bash
-# Rust
-cargo fmt --all
-cargo fmt --all -- --check
-
-# Frontend
-cd apps/desktop
-npm run format
-npm run format:check
-```
-
-`./scripts/check.sh` runs the common Rust and frontend formatting, type,
-build, and test checks together.
 
 Do not commit downloaded models, tokens, local databases, `target/`,
 `node_modules/`, or build output.
-
-## Learning Resources
-
-Want to learn more about the technologies behind local AI inference?
-
-Explore our [Learning Resources](docs/learning-resources.md) for curated references on llama.cpp, GGUF, model quantization, GPU acceleration, and inference optimization.
 
 ## License
 

@@ -102,6 +102,32 @@ impl Storage {
                 on document_chunks(document_id, chunk_index);
             ",
         )?;
+        let columns = self
+            .conn
+            .prepare("pragma table_info(prompt_presets)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !columns.iter().any(|column| column == "built_in_key") {
+            self.conn.execute(
+                "alter table prompt_presets add column built_in_key text",
+                [],
+            )?;
+        }
+        // Seed the built-in preset only when absent; never overwrite user changes.
+        let preset = PromptPreset::default_assistant();
+        self.conn.execute(
+            "insert or ignore into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at, built_in_key)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                preset.id.to_string(),
+                preset.name,
+                preset.system_prompt,
+                preset.prompt_template,
+                preset.created_at.to_rfc3339(),
+                preset.updated_at.to_rfc3339(),
+                preset.built_in_key,
+            ],
+        )?;
         Ok(())
     }
 
@@ -235,10 +261,11 @@ impl Storage {
 
     pub fn upsert_prompt_preset(&self, preset: &PromptPreset) -> anyhow::Result<()> {
         self.conn.execute(
-            "insert into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at)
-             values (?1, ?2, ?3, ?4, ?5, ?6)
+            "insert into prompt_presets (id, name, system_prompt, prompt_template, created_at, updated_at, built_in_key)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              on conflict(id) do update set name = excluded.name, system_prompt = excluded.system_prompt,
-                prompt_template = excluded.prompt_template, updated_at = excluded.updated_at",
+                prompt_template = excluded.prompt_template, updated_at = excluded.updated_at,
+                built_in_key = excluded.built_in_key",
             params![
                 preset.id.to_string(),
                 preset.name,
@@ -246,6 +273,7 @@ impl Storage {
                 preset.prompt_template,
                 preset.created_at.to_rfc3339(),
                 preset.updated_at.to_rfc3339(),
+                preset.built_in_key,
             ],
         )?;
         Ok(())
@@ -253,13 +281,14 @@ impl Storage {
 
     pub fn list_prompt_presets(&self) -> anyhow::Result<Vec<PromptPreset>> {
         let mut stmt = self.conn.prepare(
-            "select id, name, system_prompt, prompt_template, created_at, updated_at
+            "select id, name, system_prompt, prompt_template, created_at, updated_at, built_in_key
              from prompt_presets order by name collate nocase, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(PromptPreset {
                 id: parse_uuid(row.get::<_, String>(0)?)?,
                 name: row.get(1)?,
+                built_in_key: row.get(6)?,
                 system_prompt: row.get(2)?,
                 prompt_template: row.get(3)?,
                 created_at: parse_datetime(row.get::<_, String>(4)?)?,

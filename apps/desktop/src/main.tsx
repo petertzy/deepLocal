@@ -44,6 +44,7 @@ import {
   Square,
   Trash2,
   X,
+  RotateCcw,
 } from "lucide-react";
 import "./styles.css";
 
@@ -139,6 +140,7 @@ type ChatConversation = {
 type PromptPreset = {
   id: string;
   name: string;
+  built_in_key?: string | null;
   system_prompt: string | null;
   prompt_template: string | null;
   created_at: string;
@@ -727,7 +729,7 @@ export function App() {
         <header>
           <div>
             <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-            {notice && <p>{notice}</p>}
+            {notice && <p role="status" aria-live="polite" aria-atomic="true">{notice}</p>}
           </div>
           <div className="headerControls">
             <div className={`healthBadge ${health}`}>
@@ -929,6 +931,7 @@ function Chat({
   const [promptPresetTemplate, setPromptPresetTemplate] = useState("");
   const [savingPromptPreset, setSavingPromptPreset] = useState(false);
   const [deletingPromptPreset, setDeletingPromptPreset] = useState<PromptPreset | null>(null);
+  const [restoringPromptPreset, setRestoringPromptPreset] = useState<PromptPreset | null>(null);
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [loadingModelId, setLoadingModelId] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ChatConversation | null>(null);
@@ -1027,6 +1030,58 @@ function Chat({
       onNotice(`Saved prompt preset “${saved.name}”.`);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "Could not save prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
+
+  async function duplicatePromptPreset(preset: PromptPreset) {
+    const baseName = `${preset.name} (copy)`;
+    const existingNames = new Set(promptPresets.map((item) => item.name));
+    let name = baseName;
+    let suffix = 2;
+    while (existingNames.has(name)) {
+      name = `${baseName} ${suffix++}`;
+    }
+
+    setSavingPromptPreset(true);
+    try {
+      const response = await fetch(`${API_BASE}/runtime/chat/presets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          system_prompt: preset.system_prompt,
+          prompt_template: preset.prompt_template,
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const saved = (await response.json()) as PromptPreset;
+      await refreshPromptPresets();
+      selectPromptPreset(saved.id);
+      onNotice(`Duplicated prompt preset “${saved.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not duplicate prompt preset.");
+    } finally {
+      setSavingPromptPreset(false);
+    }
+  }
+
+  async function restorePromptPresetDefaults(preset: PromptPreset) {
+    setSavingPromptPreset(true);
+    try {
+      const response = await fetch(`${API_BASE}/runtime/chat/presets/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: preset.id }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await response.json();
+      await refreshPromptPresets();
+      setRestoringPromptPreset(null);
+      onNotice(`Restored defaults for “${preset.name}”.`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "Could not restore prompt preset defaults.");
     } finally {
       setSavingPromptPreset(false);
     }
@@ -1720,7 +1775,9 @@ function Chat({
                       <small>{[preset.system_prompt && "System prompt", preset.prompt_template && "Template"].filter(Boolean).join(" · ")}</small>
                     </div>
                     <button className="iconButton" aria-label={`Edit ${preset.name}`} title="Edit preset" onClick={() => startEditingPromptPreset(preset)}><Pencil size={14} /></button>
-                    <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>
+                    <button className="iconButton" aria-label={`Duplicate ${preset.name}`} title="Duplicate preset" disabled={savingPromptPreset} onClick={() => void duplicatePromptPreset(preset)}><Copy size={14} /></button>
+                    {preset.built_in_key && <button className="iconButton" aria-label={`Restore defaults for ${preset.name}`} title="Restore defaults" disabled={savingPromptPreset} onClick={() => setRestoringPromptPreset(preset)}><RotateCcw size={14} /></button>}
+                    {!preset.built_in_key && <button className="iconButton dangerAction" aria-label={`Delete ${preset.name}`} title="Delete preset" onClick={() => setDeletingPromptPreset(preset)}><Trash2 size={14} /></button>}
                   </article>
                 )) : <p className="promptPresetEmpty">No saved presets yet.</p>}
               </div>
@@ -1748,6 +1805,17 @@ function Chat({
             </div>
           </section>
         </div>
+      )}
+      {restoringPromptPreset && (
+        <ConfirmationDialog
+          title="Restore prompt preset defaults"
+          message={`Restore built-in defaults for “${restoringPromptPreset.name}”?`}
+          detail="The selected preset's name, system prompt, and template will be replaced. This cannot be undone."
+          confirmLabel="Restore defaults"
+          busy={savingPromptPreset}
+          onCancel={() => setRestoringPromptPreset(null)}
+          onConfirm={() => void restorePromptPresetDefaults(restoringPromptPreset)}
+        />
       )}
       {deletingPromptPreset && (
         <ConfirmationDialog
@@ -1813,48 +1881,100 @@ function Documents({
   const [previewContent, setPreviewContent] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
-  const [previewQuery, setPreviewQuery] = useState("");
-  const [previewMatchIndex, setPreviewMatchIndex] = useState(0);
+  const [previewQuery, setPreviewQuery] = useState("");           
+  const [previewMatchIndex, setPreviewMatchIndex] = useState(0); 
+  const previewCacheRef = useRef(new Map<string, string>());
+  const previewAbortControllerRef = useRef<AbortController | null>(null);
+  const previewBodyRef = useRef<HTMLDivElement | null>(null);
+  const previewDialogRef = useRef<HTMLElement | null>(null);
+  const previewTriggerRef = useRef<HTMLElement | null>(null);
+
+  const MAX_PREVIEW_MATCHES = 500;
 
   const previewMatches = useMemo(() => {
     const query = previewQuery.trim();
     if (!query) return [];
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return Array.from(previewContent.matchAll(new RegExp(escaped, "gi")));
+    const regex = new RegExp(escaped, "gi");
+    const matches: RegExpExecArray[] = [];
+    let match: RegExpExecArray | null;
+
+    // Собираем совпадения до безопасного лимита, чтобы не вешать поток
+    while ((match = regex.exec(previewContent)) !== null) {
+      matches.push(match);
+      if (matches.length >= MAX_PREVIEW_MATCHES) break;
+    }
+    return matches;
   }, [previewContent, previewQuery]);
 
   async function openDocumentPreview(document: LocalDocument) {
+    if (previewAbortControllerRef.current) {
+      previewAbortControllerRef.current.abort();
+      previewAbortControllerRef.current = null;
+    }
+
     setPreviewDocument(document);
-    setPreviewContent("");
     setPreviewQuery("");
     setPreviewMatchIndex(0);
     setPreviewError("");
+
+    const cachedContent = previewCacheRef.current.get(document.id);
+    if (cachedContent !== undefined) {
+      setPreviewContent(cachedContent);
+      setPreviewLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    previewAbortControllerRef.current = controller;
+
+    setPreviewContent("");
     setPreviewLoading(true);
     try {
       const response = await fetch(
         `${API_BASE}/runtime/documents/${encodeURIComponent(document.id)}/content`,
+        { signal: controller.signal }
       );
       if (!response.ok) {
         throw new Error((await response.text()) || "Could not load this indexed document.");
       }
-      const payload = await response.json() as { name?: string; content?: string };
+      const payload = (await response.json()) as { name?: string; content?: string };
       if (typeof payload.content !== "string") {
         throw new Error("The preview response did not contain document text.");
       }
-      setPreviewContent(payload.content);
+
+      previewCacheRef.current.set(document.id, payload.content);
+
+      if (!controller.signal.aborted) {
+        setPreviewContent(payload.content);
+      }
     } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : "Could not load this indexed document.");
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+      setPreviewError(
+        error instanceof Error ? error.message : "Could not load this indexed document."
+      );
     } finally {
-      setPreviewLoading(false);
+      if (previewAbortControllerRef.current === controller) {
+        setPreviewLoading(false);
+        previewAbortControllerRef.current = null;
+      }
     }
   }
 
   function closeDocumentPreview() {
+    if (previewAbortControllerRef.current) {
+      previewAbortControllerRef.current.abort();
+      previewAbortControllerRef.current = null;
+    }
+
     setPreviewDocument(null);
     setPreviewContent("");
     setPreviewQuery("");
     setPreviewError("");
     setPreviewMatchIndex(0);
+    setPreviewLoading(false);
   }
 
   function movePreviewMatch(direction: -1 | 1) {
@@ -1863,7 +1983,79 @@ function Documents({
       (current + direction + previewMatches.length) % previewMatches.length
     );
   }
+  useEffect(() => {
+      if (!previewMatches.length || !previewBodyRef.current) return;
 
+      const activeMatchElement = previewBodyRef.current.querySelector<HTMLElement>(
+        `[data-preview-match="${previewMatchIndex}"]`
+      );
+
+      if (typeof activeMatchElement?.scrollIntoView === "function") {
+        activeMatchElement.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "nearest",
+        });
+      }
+    }, [previewMatchIndex, previewMatches.length]);
+  useEffect(() => {
+    if (!previewDocument) return;
+
+    previewTriggerRef.current = document.activeElement as HTMLElement | null;
+
+    const focusTimer = window.setTimeout(() => {
+      const searchInput = previewDialogRef.current?.querySelector<HTMLInputElement>(
+        "#document-preview-search"
+      );
+      if (searchInput) {
+        searchInput.focus();
+      } else {
+        previewDialogRef.current?.focus();
+      }
+    }, 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDocumentPreview();
+        return;
+      }
+
+      if (event.key === "Tab") {
+        const dialog = previewDialogRef.current;
+        if (!dialog) return;
+
+        const focusable = dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+
+        if (!focusable.length) return;
+
+        const firstElement = focusable[0];
+        const lastElement = focusable[focusable.length - 1];
+
+        if (event.shiftKey) {
+          if (document.activeElement === firstElement) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            event.preventDefault();
+            firstElement.focus();
+          }
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+      previewTriggerRef.current?.focus();
+    };
+  }, [previewDocument]);  
   async function ingestDocument(upload: LocalDocumentUpload) {
     const response = await fetch(`${API_BASE}/runtime/documents`, {
       method: "POST",
@@ -1951,6 +2143,7 @@ function Documents({
         body: JSON.stringify({ id: document.id }),
       });
       if (!response.ok) throw new Error((await response.text()) || "Could not remove the document from the local index.");
+      previewCacheRef.current.delete(document.id);
       setRemovingDocument(null);
       await onRefresh();
       onNotice(`Removed ${document.name} from the local index.`);
@@ -2019,12 +2212,19 @@ function Documents({
         />
       )}
       {previewDocument && (
-        <div className="documentPreviewOverlay">
+        <div
+          className="documentPreviewOverlay"
+          role="presentation"
+          onMouseDown={closeDocumentPreview}
+        >
           <section
+            ref={previewDialogRef}
+            tabIndex={-1}
             className="documentPreviewDialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="document-preview-title"
+            onMouseDown={(event) => event.stopPropagation()}
           >
             <header className="documentPreviewHeader">
               <div>
@@ -2083,7 +2283,7 @@ function Documents({
               </div>
             </div>
 
-            <div className="documentPreviewBody" aria-busy={previewLoading}>
+            <div ref={previewBodyRef} className="documentPreviewBody" aria-busy={previewLoading}>
               {previewLoading ? (
                 <p className="documentPreviewMessage">Loading indexed document…</p>
               ) : previewError ? (
@@ -2097,25 +2297,38 @@ function Documents({
                 </>
               ) : (
                 <pre>{(() => {
-                  const query = previewQuery.trim();
-                  if (!query) return previewContent;
-                  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                  const parts = previewContent.split(new RegExp(`(${escaped})`, "gi"));
-                  let matchNumber = 0;
-                  return parts.map((part, index) => {
-                    if (part.toLowerCase() !== query.toLowerCase()) return part;
-                    const active = matchNumber === previewMatchIndex;
-                    matchNumber += 1;
-                    return (
+                  if (!previewMatches.length) return previewContent;
+
+                  const fragments: React.ReactNode[] = [];
+                  let lastIndex = 0;
+
+                  previewMatches.forEach((match, index) => {
+                    const matchStart = match.index;
+                    const matchEnd = matchStart + match[0].length;
+
+                    if (matchStart > lastIndex) {
+                      fragments.push(previewContent.slice(lastIndex, matchStart));
+                    }
+
+                    const active = index === previewMatchIndex;
+                    fragments.push(
                       <mark
+                        key={`match-${index}`}
+                        data-preview-match={index}
                         className={active ? "documentPreviewMatch documentPreviewMatchActive" : "documentPreviewMatch"}
-                        key={`${index}-${matchNumber}`}
-                        data-preview-match={matchNumber - 1}
                       >
-                        {part}
+                        {match[0]}
                       </mark>
                     );
+
+                    lastIndex = matchEnd;
                   });
+
+                  if (lastIndex < previewContent.length) {
+                    fragments.push(previewContent.slice(lastIndex));
+                  }
+
+                  return fragments;
                 })()}</pre>
               )}
             </div>

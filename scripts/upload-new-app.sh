@@ -136,7 +136,24 @@ cat > "$LATEST_JSON" <<EOF
 }
 EOF
 
-gh release create "$RELEASE_VERSION" \
+if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+  RELEASE_COMMIT="$(git rev-list -n 1 "$RELEASE_VERSION" 2>/dev/null || true)"
+  if [[ -z "$RELEASE_COMMIT" ]]; then
+    git fetch origin "refs/tags/$RELEASE_VERSION:refs/tags/$RELEASE_VERSION"
+    RELEASE_COMMIT="$(git rev-list -n 1 "$RELEASE_VERSION")"
+  fi
+  if [[ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" ]]; then
+    echo "The local commit does not match the release tag. Check out the release tag before uploading macOS assets." >&2
+    exit 1
+  fi
+  gh release upload "$RELEASE_VERSION" \
+    dist/deepLocal-macos.zip \
+    dist/deepLocal-macos.dmg \
+    "$UPDATER_ARCHIVE" \
+    "$UPDATER_SIGNATURE" \
+    "$LATEST_JSON"
+else
+  gh release create "$RELEASE_VERSION" \
   dist/deepLocal-macos.zip \
   dist/deepLocal-macos.dmg \
   "$UPDATER_ARCHIVE" \
@@ -161,6 +178,8 @@ Notes:
 SHA256:
 - deepLocal-macos.zip: $(shasum -a 256 dist/deepLocal-macos.zip | awk '{print $1}')
 - deepLocal-macos.dmg: $(shasum -a 256 dist/deepLocal-macos.dmg | awk '{print $1}')"
+
+fi
 
 echo ""
 echo "=== Release ==="

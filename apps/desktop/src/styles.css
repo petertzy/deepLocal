@@ -2262,6 +2262,10 @@ label {
   background: transparent;
   color: inherit;
 }
+.documentPreviewSearchRow input:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
 
 .documentPreviewSearchRow span {
   white-space: nowrap;
