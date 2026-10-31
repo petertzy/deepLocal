@@ -1877,7 +1877,185 @@ function Documents({
   const [isIngesting, setIsIngesting] = useState(false);
   const [removingDocument, setRemovingDocument] = useState<LocalDocument | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<LocalDocument | null>(null);
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewQuery, setPreviewQuery] = useState("");           
+  const [previewMatchIndex, setPreviewMatchIndex] = useState(0); 
+  const previewCacheRef = useRef(new Map<string, string>());
+  const previewAbortControllerRef = useRef<AbortController | null>(null);
+  const previewBodyRef = useRef<HTMLDivElement | null>(null);
+  const previewDialogRef = useRef<HTMLElement | null>(null);
+  const previewTriggerRef = useRef<HTMLElement | null>(null);
 
+  const MAX_PREVIEW_MATCHES = 500;
+
+  const previewMatches = useMemo(() => {
+    const query = previewQuery.trim();
+    if (!query) return [];
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "gi");
+    const matches: RegExpExecArray[] = [];
+    let match: RegExpExecArray | null;
+
+    // Собираем совпадения до безопасного лимита, чтобы не вешать поток
+    while ((match = regex.exec(previewContent)) !== null) {
+      matches.push(match);
+      if (matches.length >= MAX_PREVIEW_MATCHES) break;
+    }
+    return matches;
+  }, [previewContent, previewQuery]);
+
+  async function openDocumentPreview(document: LocalDocument) {
+    if (previewAbortControllerRef.current) {
+      previewAbortControllerRef.current.abort();
+      previewAbortControllerRef.current = null;
+    }
+
+    setPreviewDocument(document);
+    setPreviewQuery("");
+    setPreviewMatchIndex(0);
+    setPreviewError("");
+
+    const cachedContent = previewCacheRef.current.get(document.id);
+    if (cachedContent !== undefined) {
+      setPreviewContent(cachedContent);
+      setPreviewLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    previewAbortControllerRef.current = controller;
+
+    setPreviewContent("");
+    setPreviewLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/runtime/documents/${encodeURIComponent(document.id)}/content`,
+        { signal: controller.signal }
+      );
+      if (!response.ok) {
+        throw new Error((await response.text()) || "Could not load this indexed document.");
+      }
+      const payload = (await response.json()) as { name?: string; content?: string };
+      if (typeof payload.content !== "string") {
+        throw new Error("The preview response did not contain document text.");
+      }
+
+      previewCacheRef.current.set(document.id, payload.content);
+
+      if (!controller.signal.aborted) {
+        setPreviewContent(payload.content);
+      }
+    } catch (error) {
+      if (controller.signal.aborted || error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+      setPreviewError(
+        error instanceof Error ? error.message : "Could not load this indexed document."
+      );
+    } finally {
+      if (previewAbortControllerRef.current === controller) {
+        setPreviewLoading(false);
+        previewAbortControllerRef.current = null;
+      }
+    }
+  }
+
+  function closeDocumentPreview() {
+    if (previewAbortControllerRef.current) {
+      previewAbortControllerRef.current.abort();
+      previewAbortControllerRef.current = null;
+    }
+
+    setPreviewDocument(null);
+    setPreviewContent("");
+    setPreviewQuery("");
+    setPreviewError("");
+    setPreviewMatchIndex(0);
+    setPreviewLoading(false);
+  }
+
+  function movePreviewMatch(direction: -1 | 1) {
+    if (!previewMatches.length) return;
+    setPreviewMatchIndex((current) =>
+      (current + direction + previewMatches.length) % previewMatches.length
+    );
+  }
+  useEffect(() => {
+      if (!previewMatches.length || !previewBodyRef.current) return;
+
+      const activeMatchElement = previewBodyRef.current.querySelector<HTMLElement>(
+        `[data-preview-match="${previewMatchIndex}"]`
+      );
+
+      if (typeof activeMatchElement?.scrollIntoView === "function") {
+        activeMatchElement.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "nearest",
+        });
+      }
+    }, [previewMatchIndex, previewMatches.length]);
+  useEffect(() => {
+    if (!previewDocument) return;
+
+    previewTriggerRef.current = document.activeElement as HTMLElement | null;
+
+    const focusTimer = window.setTimeout(() => {
+      const searchInput = previewDialogRef.current?.querySelector<HTMLInputElement>(
+        "#document-preview-search"
+      );
+      if (searchInput) {
+        searchInput.focus();
+      } else {
+        previewDialogRef.current?.focus();
+      }
+    }, 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDocumentPreview();
+        return;
+      }
+
+      if (event.key === "Tab") {
+        const dialog = previewDialogRef.current;
+        if (!dialog) return;
+
+        const focusable = dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+
+        if (!focusable.length) return;
+
+        const firstElement = focusable[0];
+        const lastElement = focusable[focusable.length - 1];
+
+        if (event.shiftKey) {
+          if (document.activeElement === firstElement) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            event.preventDefault();
+            firstElement.focus();
+          }
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+      previewTriggerRef.current?.focus();
+    };
+  }, [previewDocument]);  
   async function ingestDocument(upload: LocalDocumentUpload) {
     const response = await fetch(`${API_BASE}/runtime/documents`, {
       method: "POST",
@@ -1965,6 +2143,7 @@ function Documents({
         body: JSON.stringify({ id: document.id }),
       });
       if (!response.ok) throw new Error((await response.text()) || "Could not remove the document from the local index.");
+      previewCacheRef.current.delete(document.id);
       setRemovingDocument(null);
       await onRefresh();
       onNotice(`Removed ${document.name} from the local index.`);
@@ -2007,6 +2186,10 @@ function Documents({
                 <span>{document.chunk_count} chunks · {formatDocumentCharacters(document.character_count)}</span>
               </div>
               <div className="documentActions">
+                <button className="secondaryAction" onClick={() => openDocumentPreview(document)}>
+                  <Search size={15} />
+                  Preview
+                </button>
                 <button className="secondaryAction" onClick={onOpenChat}>
                   <MessageSquare size={15} />
                   Chat
@@ -2027,6 +2210,130 @@ function Documents({
           actionLabel="Add documents"
           onAction={chooseDocuments}
         />
+      )}
+      {previewDocument && (
+        <div
+          className="documentPreviewOverlay"
+          role="presentation"
+          onMouseDown={closeDocumentPreview}
+        >
+          <section
+            ref={previewDialogRef}
+            tabIndex={-1}
+            className="documentPreviewDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="document-preview-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className="documentPreviewHeader">
+              <div>
+                <h2 id="document-preview-title">{previewDocument.name}</h2>
+                <p>Read-only indexed document preview</p>
+              </div>
+              <button
+                type="button"
+                className="iconButton"
+                aria-label="Close document preview"
+                onClick={closeDocumentPreview}
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="documentPreviewSearch">
+              <label htmlFor="document-preview-search">Find in document</label>
+              <div className="documentPreviewSearchRow">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  id="document-preview-search"
+                  type="search"
+                  placeholder="Search text (case-insensitive)"
+                  value={previewQuery}
+                  onChange={(event) => {
+                    setPreviewQuery(event.target.value);
+                    setPreviewMatchIndex(0);
+                  }}
+                />
+                <span aria-live="polite">
+                  {previewQuery.trim()
+                    ? `${previewMatches.length ? previewMatchIndex + 1 : 0} of ${previewMatches.length}`
+                    : "Search"}
+                </span>
+              </div>
+              <div className="documentPreviewNavigation">
+                <button
+                  type="button"
+                  className="secondaryAction"
+                  onClick={() => movePreviewMatch(-1)}
+                  disabled={!previewMatches.length}
+                  aria-label="Previous search match"
+                >
+                  <ArrowLeft size={15} /> Previous
+                </button>
+                <button
+                  type="button"
+                  className="secondaryAction"
+                  onClick={() => movePreviewMatch(1)}
+                  disabled={!previewMatches.length}
+                  aria-label="Next search match"
+                >
+                  Next <ArrowRight size={15} />
+                </button>
+              </div>
+            </div>
+
+            <div ref={previewBodyRef} className="documentPreviewBody" aria-busy={previewLoading}>
+              {previewLoading ? (
+                <p className="documentPreviewMessage">Loading indexed document…</p>
+              ) : previewError ? (
+                <p className="documentPreviewError" role="alert">{previewError}</p>
+              ) : !previewContent.length ? (
+                <p className="documentPreviewMessage">This indexed document is empty.</p>
+              ) : previewQuery.trim() && !previewMatches.length ? (
+                <>
+                  <p className="documentPreviewMessage">No matches found for “{previewQuery.trim()}”.</p>
+                  <pre>{previewContent}</pre>
+                </>
+              ) : (
+                <pre>{(() => {
+                  if (!previewMatches.length) return previewContent;
+
+                  const fragments: React.ReactNode[] = [];
+                  let lastIndex = 0;
+
+                  previewMatches.forEach((match, index) => {
+                    const matchStart = match.index;
+                    const matchEnd = matchStart + match[0].length;
+
+                    if (matchStart > lastIndex) {
+                      fragments.push(previewContent.slice(lastIndex, matchStart));
+                    }
+
+                    const active = index === previewMatchIndex;
+                    fragments.push(
+                      <mark
+                        key={`match-${index}`}
+                        data-preview-match={index}
+                        className={active ? "documentPreviewMatch documentPreviewMatchActive" : "documentPreviewMatch"}
+                      >
+                        {match[0]}
+                      </mark>
+                    );
+
+                    lastIndex = matchEnd;
+                  });
+
+                  if (lastIndex < previewContent.length) {
+                    fragments.push(previewContent.slice(lastIndex));
+                  }
+
+                  return fragments;
+                })()}</pre>
+              )}
+            </div>
+          </section>
+        </div>
       )}
       {removingDocument && (
         <ConfirmationDialog

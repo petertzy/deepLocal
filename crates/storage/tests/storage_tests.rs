@@ -161,7 +161,7 @@ fn replaces_documents_and_persists_local_embeddings() {
     };
 
     storage
-        .replace_document(&document, &[first_chunk])
+        .replace_document(&document, &[first_chunk], None)
         .expect("store document");
     let documents = storage.list_documents().expect("list documents");
     let chunks = storage
@@ -192,6 +192,7 @@ fn replaces_documents_and_persists_local_embeddings() {
                 content: "Replacement content.".to_string(),
                 embedding: vec![1.0, 0.0, 0.0],
             }],
+            None,
         )
         .expect("replace document");
 

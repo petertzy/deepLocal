@@ -3,7 +3,7 @@ use deeplocal_core::{
     ChatMessage, ChatRole, ChatSession, DocumentChunk, DownloadJob, GenerationParameters,
     IndexedDocumentChunk, LocalDocument, ModelDescriptor, PromptPreset,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -85,6 +85,7 @@ impl Storage {
                 id text primary key,
                 name text not null,
                 source_key text not null unique,
+                content text,
                 character_count integer not null,
                 chunk_count integer not null,
                 created_at text not null,
@@ -112,6 +113,15 @@ impl Storage {
                 "alter table prompt_presets add column built_in_key text",
                 [],
             )?;
+        }
+        let document_columns = self
+            .conn
+            .prepare("pragma table_info(local_documents)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !document_columns.iter().any(|column| column == "content") {
+            self.conn
+                .execute("alter table local_documents add column content text", [])?;
         }
         // Seed the built-in preset only when absent; never overwrite user changes.
         let preset = PromptPreset::default_assistant();
@@ -356,6 +366,7 @@ impl Storage {
         &self,
         document: &LocalDocument,
         chunks: &[DocumentChunk],
+        original_content: Option<&str>,
     ) -> anyhow::Result<()> {
         let transaction = self.conn.unchecked_transaction()?;
         transaction.execute(
@@ -368,12 +379,13 @@ impl Storage {
         )?;
         transaction.execute(
             "insert into local_documents (
-                id, name, source_key, character_count, chunk_count, created_at, updated_at
-             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                id, name, source_key, content, character_count, chunk_count, created_at, updated_at
+             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 document.id.to_string(),
                 document.name,
                 document.source_key,
+                original_content,
                 document.character_count,
                 document.chunk_count,
                 document.created_at.to_rfc3339(),
@@ -433,6 +445,38 @@ impl Storage {
         )? > 0)
     }
 
+    /// Returns the indexed text for one document without changing the index.
+    pub fn get_document_content(&self, id: Uuid) -> anyhow::Result<Option<(String, String)>> {
+        let name = self
+            .conn
+            .query_row(
+                "select name, content from local_documents where id = ?1",
+                params![id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+
+        let Some((name, original_content)) = name else {
+            return Ok(None);
+        };
+        if let Some(content) = original_content {
+            return Ok(Some((name, content)));
+        }
+
+        let mut statement = self.conn.prepare(
+            "select content from document_chunks
+             where document_id = ?1
+             order by chunk_index asc",
+        )?;
+        let rows = statement.query_map(params![id.to_string()], |row| row.get::<_, String>(0))?;
+
+        let mut content = String::new();
+        for row in rows {
+            content.push_str(&row?);
+        }
+
+        Ok(Some((name, content)))
+    }
     pub fn list_indexed_document_chunks(&self) -> anyhow::Result<Vec<IndexedDocumentChunk>> {
         let mut statement = self.conn.prepare(
             "select chunks.id, chunks.document_id, documents.name, chunks.chunk_index, chunks.content, chunks.embedding
