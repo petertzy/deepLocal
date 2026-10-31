@@ -1949,7 +1949,7 @@ function Documents({
         setPreviewContent(payload.content);
       }
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
+      if (controller.signal.aborted || error instanceof Error && error.name === "AbortError") {
         return;
       }
       setPreviewError(

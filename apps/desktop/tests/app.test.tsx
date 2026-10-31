@@ -961,4 +961,52 @@ describe("core frontend flows", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
   });
 
+  it("ignores a stale preview error after the dialog is reopened", async () => {
+    const state: Record<string, unknown> = apiState({
+      documents: [{
+        id: "document-1",
+        name: "preview.txt",
+        source_key: "preview.txt",
+        character_count: 12,
+        chunk_count: 1,
+        created_at: "2026-10-28T00:00:00.000Z",
+        updated_at: "2026-10-28T00:00:00.000Z",
+      }],
+    });
+    let contentRequests = 0;
+    let resolveFirstResponse: ((response: Response) => void) | undefined;
+    const fetchMock = installFetch(state);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), "http://127.0.0.1:14567").pathname;
+      if (path === "/runtime/documents/document-1/content") {
+        contentRequests += 1;
+        if (contentRequests === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirstResponse = resolve;
+          });
+        }
+        return jsonResponse({ name: "preview.txt", content: "Current preview" });
+      }
+      return jsonResponse(state[path] ?? []);
+    });
+
+    render(<App />);
+    await navigate("Documents");
+    const previewButton = await screen.findByRole("button", { name: /preview/i });
+    await userEvent.click(previewButton);
+    await userEvent.click(await screen.findByRole("button", { name: "Close document preview" }));
+    await userEvent.click(previewButton);
+    expect(await screen.findByText("Current preview")).toBeInTheDocument();
+
+    resolveFirstResponse?.({
+      ok: false,
+      json: async () => ({ error: "Stale failure" }),
+      text: async () => "Stale failure",
+    } as Response);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
 });

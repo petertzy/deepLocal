@@ -1120,7 +1120,7 @@ mod tests {
             },
         ];
         storage
-            .replace_document(&document, &chunks)
+            .replace_document(&document, &chunks, None)
             .expect("store document chunks");
 
         let results = retrieve_document_chunks(&storage, "What does the Harbor release add?", 4)
@@ -1221,6 +1221,48 @@ mod tests {
                 .contains("Second preview paragraph."),
             "preview should include the second paragraph: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn document_content_endpoint_preserves_long_document_without_chunk_overlap() {
+        let storage = Storage::open_memory().expect("open in-memory storage");
+        let app = super::router_with_storage(
+            RuntimeManager::default(),
+            false,
+            super::SearchFiltersConfig::default(),
+            std::env::temp_dir().join(format!("deeplocal-doc-preview-{}", Uuid::new_v4())),
+            storage,
+        );
+        let content = (0..1_500)
+            .map(|index| format!("word-{index:04}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let ingest = app
+            .clone()
+            .oneshot(json_request(
+                "/runtime/documents",
+                serde_json::json!({
+                    "name": "long-preview.txt",
+                    "content": content,
+                    "source_key": "test:long-preview"
+                }),
+            ))
+            .await
+            .expect("ingest long preview document");
+        let document = response_json(ingest).await;
+        let id = document["id"].as_str().expect("ingested document id");
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/runtime/documents/{id}/content"))
+                    .body(Body::empty())
+                    .expect("build preview request"),
+            )
+            .await
+            .expect("request document preview");
+        let body = response_json(response).await;
+        assert_eq!(body["content"].as_str(), Some(content.as_str()));
     }
 
     #[tokio::test]
@@ -3403,7 +3445,7 @@ async fn ingest_document(
         .collect::<Vec<_>>();
 
     let storage = state.storage.lock().await;
-    match storage.replace_document(&document, &chunks) {
+    match storage.replace_document(&document, &chunks, Some(&content)) {
         Ok(()) => (axum::http::StatusCode::CREATED, Json(document)).into_response(),
         Err(error) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
