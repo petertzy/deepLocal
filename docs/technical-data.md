@@ -515,7 +515,7 @@ automatically.
    [Desktop packaging](https://github.com/petertzy/deepLocal/actions/workflows/desktop-packaging.yml),
    choose **Run workflow**, select `main`, and start the run.
 2. Wait until `Package ubuntu-22.04`, `Package windows-2022`, and
-   `Package macos-14` all succeed. Open the run and inspect its artifacts.
+   `Package macos-13` all succeed. Open the run and inspect its artifacts.
    Each platform artifact contains a `release-version.txt` manifest; all three
    must contain the same `vMAJOR.MINOR.PATCH` version. Linux produces a `.deb`
    and an `.AppImage`, Windows produces an NSIS `.exe`, and macOS produces a
