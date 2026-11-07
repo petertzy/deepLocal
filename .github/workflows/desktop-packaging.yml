@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        os: [ubuntu-22.04, windows-2022, macos-14]
     defaults:
       run:
         working-directory: .
@@ -89,6 +89,11 @@ jobs:
           if (-not $server) { throw 'llama-server.exe was not found in the downloaded archive.' }
           "DEEPLOCAL_LLAMA_SERVER=$($server.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/package-macos-app.sh
+
       - name: Package Linux
         if: runner.os == 'Linux'
         shell: bash
@@ -107,6 +112,8 @@ jobs:
             dist/*.deb
             dist/*.AppImage
             dist/*.exe
+            dist/*.zip
+            dist/*.dmg
             release-version.txt
           if-no-files-found: error
           retention-days: 14

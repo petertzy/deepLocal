@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Publish Windows and Linux installers
+    name: Publish desktop installers
     runs-on: ubuntu-latest
     steps:
       - name: Select latest successful packaging run
@@ -52,10 +52,11 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t manifests < <(find "$RUNNER_TEMP/installers" -name release-version.txt -type f)
-          [[ "${#manifests[@]}" == 2 ]] || { echo "Expected two version manifests." >&2; exit 1; }
+          [[ "${#manifests[@]}" == 3 ]] || { echo "Expected three version manifests." >&2; exit 1; }
           version="$(cat "${manifests[0]}")"
           [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
           [[ "$(cat "${manifests[1]}")" == "$version" ]] || { echo "Package versions differ." >&2; exit 1; }
+          [[ "$(cat "${manifests[2]}")" == "$version" ]] || { echo "Package versions differ." >&2; exit 1; }
           if gh release view "$version" >/dev/null 2>&1; then
             echo "Release $version already exists. Refusing to overwrite it." >&2
             exit 1
@@ -72,13 +73,15 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/installers"
-          mapfile -d '' files < <(find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -print0)
+          mapfile -d '' files < <(find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name 'deepLocal-macos.zip' -o -name 'deepLocal-macos.dmg' \) -print0)
           (("${#files[@]}" > 0)) || { echo "No installer files were downloaded." >&2; exit 1; }
           find . -type f | sort
           find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -exec sha256sum {} +
           test "$(find . -type f -name '*.exe' | wc -l)" -gt 0 || { echo "Windows installer is missing." >&2; exit 1; }
           test "$(find . -type f -name '*.deb' | wc -l)" -gt 0 || { echo "Linux DEB is missing." >&2; exit 1; }
           test "$(find . -type f -name '*.AppImage' | wc -l)" -gt 0 || { echo "Linux AppImage is missing." >&2; exit 1; }
+          test "$(find . -type f -name 'deepLocal-macos.zip' | wc -l)" -gt 0 || { echo "macOS ZIP is missing." >&2; exit 1; }
+          test "$(find . -type f -name 'deepLocal-macos.dmg' | wc -l)" -gt 0 || { echo "macOS DMG is missing." >&2; exit 1; }
           mkdir -p "$RUNNER_TEMP/upload"
           for file in "${files[@]}"; do
             name="$(basename "$file")"
@@ -97,5 +100,5 @@ jobs:
           shopt -s nullglob
           files=("$RUNNER_TEMP"/upload/*)
           (("${#files[@]}" > 0)) || exit 1
-          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Windows and Linux desktop installers. macOS packages can be added separately."
+          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Windows, Linux, and macOS desktop installers."
           gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"

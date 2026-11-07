@@ -536,6 +536,15 @@ impl InferenceBackend for LlamaCppBackend {
             .arg("1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // llama-server is a console executable. Without this flag, Windows
+        // creates a visible console window when the desktop app loads a model.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.as_std_mut().creation_flags(CREATE_NO_WINDOW);
+        }
         if let Some(context) = options.context_length {
             command.arg("--ctx-size").arg(context.to_string());
         }

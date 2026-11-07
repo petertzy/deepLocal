@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use deeplocal_core::{DeepLocalConfig, ModelDescriptor};
 use deeplocal_runtime::{LlamaCppBackend, MockBackend, RuntimeManager};
 use std::{fs, path::PathBuf, sync::Arc};

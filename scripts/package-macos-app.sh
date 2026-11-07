@@ -232,6 +232,7 @@ elif [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
 const fs = require('fs');
 const [sourcePath, targetPath] = process.argv.slice(2);
 const config = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
+if (process.env.DEEPLOCAL_RELEASE_VERSION) config.version = process.env.DEEPLOCAL_RELEASE_VERSION.replace(/^v/, '');
 config.bundle.createUpdaterArtifacts = false;
 if (config.plugins) delete config.plugins.updater;
 fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
