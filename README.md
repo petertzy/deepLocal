@@ -12,6 +12,17 @@ For architecture, packaging, release, and API details, see the
 
 <img width="1432" height="745" alt="Image" src="https://github.com/user-attachments/assets/ebaddb08-39c0-4990-81f0-97d47dafa93b" />
 
+## Install the packaged app
+
+Desktop installers are currently published in separate releases by platform:
+
+| Platform | Version | Download |
+| --- | --- | --- |
+| Windows x64 | [Windows installer (.exe)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_x64-setup.exe) |
+| Linux x64 (Debian/Ubuntu) | [DEB package (.deb)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.deb) |
+| Linux x64 (portable) | [AppImage](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.AppImage) |
+| macOS | [macOS release](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_macos.dmg) |
+
 ## Features
 
 - Search and download GGUF models from Hugging Face.
