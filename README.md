@@ -18,10 +18,10 @@ Desktop installers are currently published in separate releases by platform:
 
 | Platform | Version | Download |
 | --- | --- | --- |
-| Windows x64 | [Windows installer (.exe)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_x64-setup.exe) |
-| Linux x64 (Debian/Ubuntu) | [DEB package (.deb)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.deb) |
-| Linux x64 (portable) | [AppImage](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.AppImage) |
-| macOS | [macOS release](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_macos.dmg) |
+| Windows x64 | v0.1.15 | [Windows installer (.exe)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_x64-setup.exe) |
+| Linux x64 (Debian/Ubuntu) |v0.1.15 | [DEB package (.deb)](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.deb) |
+| Linux x64 (portable) |v0.1.15 | [AppImage](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_amd64.AppImage) |
+| macOS |v0.1.15 | [macOS release](https://github.com/petertzy/deepLocal/releases/download/v0.1.15/deepLocal_0.1.15_macos.dmg) |
 
 ## Features
 
