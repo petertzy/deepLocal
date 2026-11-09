@@ -94,6 +94,7 @@ Useful commands:
 ./scripts/start-dev.sh --build
 ./scripts/install-macos.sh
 ./scripts/package-macos-app.sh
+./scripts/upload-new-app.sh
 ./scripts/uninstall-local.sh
 DEEPLOCAL_SKIP_LLAMA_INSTALL=1 ./scripts/start-dev.sh
 ```
