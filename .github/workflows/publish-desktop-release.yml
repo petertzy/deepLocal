@@ -2,6 +2,11 @@ name: Publish desktop release
 
 on:
   workflow_dispatch:
+    inputs:
+      packaging_run_id:
+        description: "Optional successful packaging run ID (defaults to latest successful run)"
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -21,12 +26,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          REQUESTED_RUN_ID: ${{ inputs.packaging_run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GH_REPO/actions/workflows/desktop-packaging.yml/runs?event=workflow_dispatch&status=success&per_page=100" > "$RUNNER_TEMP/runs.json"
-          run_id="$(jq -r '.workflow_runs[0].id // empty' "$RUNNER_TEMP/runs.json")"
-          run_sha="$(jq -r '.workflow_runs[0].head_sha // empty' "$RUNNER_TEMP/runs.json")"
+          if [[ -n "$REQUESTED_RUN_ID" ]]; then
+            [[ "$REQUESTED_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Invalid packaging run ID." >&2; exit 1; }
+            gh api "repos/$GH_REPO/actions/runs/$REQUESTED_RUN_ID" > "$RUNNER_TEMP/run.json"
+            jq -e '.conclusion == "success" and .event == "workflow_dispatch" and .name == "Desktop packaging"' "$RUNNER_TEMP/run.json" >/dev/null || {
+              echo "Selected run is not a successful Desktop packaging workflow." >&2
+              exit 1
+            }
+            run_id="$(jq -r '.id' "$RUNNER_TEMP/run.json")"
+            run_sha="$(jq -r '.head_sha' "$RUNNER_TEMP/run.json")"
+          else
+            gh api "repos/$GH_REPO/actions/workflows/desktop-packaging.yml/runs?event=workflow_dispatch&status=success&per_page=100" > "$RUNNER_TEMP/runs.json"
+            run_id="$(jq -r '.workflow_runs[0].id // empty' "$RUNNER_TEMP/runs.json")"
+            run_sha="$(jq -r '.workflow_runs[0].head_sha // empty' "$RUNNER_TEMP/runs.json")"
+          fi
           [[ -n "$run_id" && -n "$run_sha" ]] || { echo "No successful packaging run found." >&2; exit 1; }
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "run_sha=$run_sha" >> "$GITHUB_OUTPUT"
@@ -64,12 +81,10 @@ jobs:
               exit 1
             }
           done
-          if gh release view "$version" >/dev/null 2>&1; then
-            echo "Release $version already exists. Refusing to overwrite it." >&2
-            exit 1
-          fi
-          if gh api "repos/$GH_REPO/git/ref/tags/$version" >/dev/null 2>&1; then
-            echo "Tag $version already exists. Refusing to overwrite it." >&2
+          if gh release view "$version" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Appending missing installers to existing release $version" >> "$GITHUB_STEP_SUMMARY"
+          elif gh api "repos/$GH_REPO/git/ref/tags/$version" >/dev/null 2>&1; then
+            echo "Tag $version already exists without a release; refusing to create an ambiguous release." >&2
             exit 1
           fi
           echo "release_tag=$version" >> "$GITHUB_OUTPUT"
@@ -122,5 +137,20 @@ jobs:
           shopt -s nullglob
           files=("$RUNNER_TEMP"/upload/*)
           (("${#files[@]}" > 0)) || exit 1
-          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Desktop installers for the selected platforms."
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/existing-assets.txt"
+            new_files=()
+            for file in "${files[@]}"; do
+              name="$(basename "$file")"
+              if grep -Fxq "$name" "$RUNNER_TEMP/existing-assets.txt"; then
+                echo "Installer $name already exists in $RELEASE_TAG; refusing to overwrite it." >&2
+                exit 1
+              fi
+              new_files+=("$file")
+            done
+            gh release upload "$RELEASE_TAG" "${new_files[@]}" --repo "$GH_REPO"
+            echo "Added ${#new_files[@]} installer(s) to $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Desktop installers for the selected platforms."
+          fi
           gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
