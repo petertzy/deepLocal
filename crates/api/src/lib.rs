@@ -3870,6 +3870,48 @@ fn requires_native_chat(request: &OpenAiChatRequest) -> bool {
     })
 }
 
+// Some GGUF chat templates require one leading system turn followed by
+// alternating user/assistant turns. Merge adjacent plain-text turns without
+// changing the ordering or identity of assistant tool calls and tool results.
+fn normalize_native_chat_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut system = Vec::new();
+    let mut conversation: Vec<serde_json::Value> = Vec::new();
+    for message in messages {
+        let role = message.get("role").and_then(|value| value.as_str()).unwrap_or("");
+        let content = message.get("content").and_then(|value| value.as_str());
+        if role == "system" {
+            if let Some(content) = content {
+                system.push(content.to_string());
+            }
+            continue;
+        }
+        if matches!(role, "user" | "assistant") && content.is_some()
+            && message.get("tool_calls").and_then(|value| value.as_array())
+                .is_none_or(|calls| calls.is_empty())
+        {
+            if let Some(previous) = conversation.last_mut() {
+                if previous.get("role").and_then(|value| value.as_str()) == Some(role)
+                    && previous.get("tool_calls").and_then(|value| value.as_array())
+                        .is_none_or(|calls| calls.is_empty())
+                {
+                    if let Some(existing) = previous.get("content").and_then(|value| value.as_str()) {
+                        let combined = format!("{existing}\\n\\n{}", content.unwrap_or_default());
+                        previous["content"] = serde_json::Value::String(combined);
+                        continue;
+                    }
+                }
+            }
+        }
+        conversation.push(message);
+    }
+    if !system.is_empty() {
+        conversation.insert(0, serde_json::json!({
+            "role": "system", "content": system.join("\\n\\n")
+        }));
+    }
+    conversation
+}
+
 // Preserve the upstream llama.cpp tool-call protocol instead of guessing tools
 // from generated text. llama-server applies native or generic Jinja templates.
 fn native_tool_payload(
@@ -3939,7 +3981,7 @@ async fn native_tool_chat_completions(
             }
         }
     }
-    let payload = native_tool_payload(body, messages);
+    let payload = native_tool_payload(body, normalize_native_chat_messages(messages));
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
@@ -3972,6 +4014,34 @@ async fn native_tool_chat_completions(
 #[cfg(test)]
 mod openai_native_tool_tests {
     use super::*;
+
+    #[test]
+    fn normalizes_agent_system_turns_and_adjacent_user_messages() {
+        let messages = vec![
+            serde_json::json!({"role":"system","content":"Agent rules"}),
+            serde_json::json!({"role":"user","content":"hello"}),
+            serde_json::json!({"role":"assistant","content":"Hello!"}),
+            serde_json::json!({"role":"user","content":"Create a game"}),
+            serde_json::json!({"role":"system","content":"Subagent instructions"}),
+            serde_json::json!({"role":"user","content":"Additional requirements"}),
+        ];
+        let normalized = normalize_native_chat_messages(messages);
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[0]["role"], "system");
+        assert_eq!(normalized[0]["content"], "Agent rules\\n\\nSubagent instructions");
+        assert_eq!(normalized[3]["role"], "user");
+        assert_eq!(normalized[3]["content"], "Create a game\\n\\nAdditional requirements");
+    }
+
+    #[test]
+    fn preserves_tool_call_result_boundaries() {
+        let messages = vec![
+            serde_json::json!({"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}),
+            serde_json::json!({"role":"tool","tool_call_id":"call_1","content":"result"}),
+            serde_json::json!({"role":"user","content":"continue"}),
+        ];
+        assert_eq!(normalize_native_chat_messages(messages.clone()), messages);
+    }
 
     #[test]
     fn preserves_tool_choice_and_tool_history() {
