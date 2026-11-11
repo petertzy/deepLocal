@@ -47,5 +47,10 @@ pub trait InferenceBackend: Send + Sync {
         &self,
         request: GenerationRequest,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<GeneratedToken>>>;
+    // The optional native chat endpoint preserves tool calls and tool results.
+    // Only backends with an OpenAI-compatible server implement it.
+    async fn openai_chat_endpoint(&self, _model_id: &str) -> Option<String> {
+        None
+    }
     async fn unload(&self, model_id: &str) -> anyhow::Result<()>;
 }

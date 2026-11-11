@@ -3795,12 +3795,48 @@ pub struct OpenAiChatRequest {
     pub stop: Vec<String>,
     pub seed: Option<u64>,
     pub use_documents: Option<bool>,
+    #[serde(default)]
+    pub tools: Vec<OpenAiTool>,
+    pub tool_choice: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OpenAiTool {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: OpenAiFunction,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OpenAiFunction {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OpenAiToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: OpenAiToolCallFunction,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OpenAiToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<OpenAiToolCall>,
 }
 
 fn deserialize_stop_sequences<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -3826,26 +3862,247 @@ where
     }
 }
 
+// A continuation may contain tool-call history even if no new tools are
+// offered. Keep those turns on the native chat-template path as well.
+fn requires_native_chat(request: &OpenAiChatRequest) -> bool {
+    !request.tools.is_empty() || request.messages.iter().any(|message| {
+        message.role == "tool" || !message.tool_calls.is_empty()
+    })
+}
+
+// Some GGUF chat templates require one leading system turn followed by
+// alternating user/assistant turns. Merge adjacent plain-text turns without
+// changing the ordering or identity of assistant tool calls and tool results.
+fn normalize_native_chat_messages(messages: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut system = Vec::new();
+    let mut conversation: Vec<serde_json::Value> = Vec::new();
+    for message in messages {
+        let role = message.get("role").and_then(|value| value.as_str()).unwrap_or("");
+        let content = message.get("content").and_then(|value| value.as_str());
+        if role == "system" {
+            if let Some(content) = content {
+                system.push(content.to_string());
+            }
+            continue;
+        }
+        if matches!(role, "user" | "assistant") && content.is_some()
+            && message.get("tool_calls").and_then(|value| value.as_array())
+                .is_none_or(|calls| calls.is_empty())
+        {
+            if let Some(previous) = conversation.last_mut() {
+                if previous.get("role").and_then(|value| value.as_str()) == Some(role)
+                    && previous.get("tool_calls").and_then(|value| value.as_array())
+                        .is_none_or(|calls| calls.is_empty())
+                {
+                    if let Some(existing) = previous.get("content").and_then(|value| value.as_str()) {
+                        let combined = format!("{existing}\n\n{}", content.unwrap_or_default());
+                        previous["content"] = serde_json::Value::String(combined);
+                        continue;
+                    }
+                }
+            }
+        }
+        conversation.push(message);
+    }
+    if !system.is_empty() {
+        conversation.insert(0, serde_json::json!({
+            "role": "system", "content": system.join("\n\n")
+        }));
+    }
+    conversation
+}
+
+// Preserve the upstream llama.cpp tool-call protocol instead of guessing tools
+// from generated text. llama-server applies native or generic Jinja templates.
+fn native_tool_payload(
+    request: &OpenAiChatRequest,
+    messages: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": request.model,
+        "messages": messages,
+        "tools": request.tools,
+        "stream": request.stream,
+        "cache_prompt": false,
+    });
+    let fields = payload.as_object_mut().expect("tool request is an object");
+    if let Some(choice) = &request.tool_choice {
+        fields.insert("tool_choice".into(), choice.clone());
+    }
+    if let Some(value) = request.temperature {
+        fields.insert("temperature".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.top_p {
+        fields.insert("top_p".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.max_tokens {
+        fields.insert("max_tokens".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.seed {
+        fields.insert("seed".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.repeat_penalty {
+        fields.insert("repeat_penalty".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.repeat_last_n {
+        fields.insert("repeat_last_n".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.min_p {
+        fields.insert("min_p".into(), serde_json::json!(value));
+    }
+    if !request.stop.is_empty() {
+        fields.insert("stop".into(), serde_json::json!(request.stop));
+    }
+    payload
+}
+
+async fn native_tool_chat_completions(
+    state: &Arc<ApiState>,
+    body: &OpenAiChatRequest,
+) -> axum::response::Response {
+    let endpoint = match state.runtime.openai_chat_endpoint(&body.model).await {
+        Ok(endpoint) => endpoint,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let mut messages = body.messages.iter()
+        .map(|message| serde_json::to_value(message).expect("chat message serialization"))
+        .collect::<Vec<_>>();
+    if body.use_documents.unwrap_or(true) {
+        if let Some(query) = body.messages.iter().rev()
+            .find(|message| message.role == "user")
+            .and_then(|message| message.content.as_deref())
+        {
+            let storage = state.storage.lock().await;
+            if let Ok(Some(context)) = document_context_message(&storage, query) {
+                let index = body.messages.iter().take_while(|message| message.role == "system").count();
+                messages.insert(index, serde_json::json!({
+                    "role": "system", "content": context.content
+                }));
+            }
+        }
+    }
+    let payload = native_tool_payload(body, normalize_native_chat_messages(messages));
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    };
+    let upstream = match client.post(&endpoint).json(&payload).send().await {
+        Ok(response) => response,
+        Err(error) => return (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+    };
+    let status = StatusCode::from_u16(upstream.status().as_u16())
+        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(if body.stream { "text/event-stream" } else { "application/json" })
+        .to_string();
+    // Forward the upstream SSE / JSON bytes intact, including finish_reason,
+    // delta.tool_calls, tool IDs, and any backend errors.
+    let stream = upstream.bytes_stream().map(|chunk| chunk.map_err(std::io::Error::other));
+    let mut response = axum::response::Response::new(axum::body::Body::from_stream(stream));
+    *response.status_mut() = status;
+    if let Ok(header) = axum::http::HeaderValue::from_str(&content_type) {
+        response.headers_mut().insert(axum::http::header::CONTENT_TYPE, header);
+    }
+    response
+}
+
+#[cfg(test)]
+mod openai_native_tool_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_agent_system_turns_and_adjacent_user_messages() {
+        let messages = vec![
+            serde_json::json!({"role":"system","content":"Agent rules"}),
+            serde_json::json!({"role":"user","content":"hello"}),
+            serde_json::json!({"role":"assistant","content":"Hello!"}),
+            serde_json::json!({"role":"user","content":"Create a game"}),
+            serde_json::json!({"role":"system","content":"Subagent instructions"}),
+            serde_json::json!({"role":"user","content":"Additional requirements"}),
+        ];
+        let normalized = normalize_native_chat_messages(messages);
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[0]["role"], "system");
+        assert_eq!(normalized[0]["content"], "Agent rules\n\nSubagent instructions");
+        assert_eq!(normalized[3]["role"], "user");
+        assert_eq!(normalized[3]["content"], "Create a game\n\nAdditional requirements");
+    }
+
+    #[test]
+    fn preserves_tool_call_result_boundaries() {
+        let messages = vec![
+            serde_json::json!({"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}),
+            serde_json::json!({"role":"tool","tool_call_id":"call_1","content":"result"}),
+            serde_json::json!({"role":"user","content":"continue"}),
+        ];
+        assert_eq!(normalize_native_chat_messages(messages.clone()), messages);
+    }
+
+    #[test]
+    fn preserves_tool_choice_and_tool_history() {
+        let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local:example.gguf", "stream": true,
+            "tool_choice": "required",
+            "tools": [{ "type": "function", "function": {
+                "name": "read_file", "parameters": { "type": "object",
+                    "properties": { "path": { "type": "string" } }, "required": ["path"] }
+            }}],
+            "messages": [
+                { "role": "assistant", "content": null, "tool_calls": [{
+                    "id": "call_1", "type": "function", "function": {
+                        "name": "read_file", "arguments": "{\\\"path\\\":\\\"README.md\\\"}" }
+                }]},
+                { "role": "tool", "tool_call_id": "call_1", "content": "file contents" }
+            ]
+        })).expect("valid request");
+        let messages = request.messages.iter()
+            .map(|message| serde_json::to_value(message).expect("serializable message"))
+            .collect::<Vec<_>>();
+        let payload = native_tool_payload(&request, messages);
+        assert_eq!(payload["tool_choice"], "required");
+        assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
+        assert_eq!(payload["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            r#"{ "path": "README.md" }"#.replace(' ', ""));
+        assert_eq!(payload["messages"][1]["role"], "tool");
+        assert_eq!(payload["messages"][1]["tool_call_id"], "call_1");
+        assert_eq!(payload["stream"], true);
+        assert!(requires_native_chat(&request));
+        let mut continuation_without_tools = request;
+        continuation_without_tools.tools.clear();
+        assert!(requires_native_chat(&continuation_without_tools));
+    }
+}
+
 async fn chat_completions(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<OpenAiChatRequest>,
 ) -> impl IntoResponse {
+    if requires_native_chat(&body) {
+        return native_tool_chat_completions(&state, &body).await;
+    }
     let mut messages = body
         .messages
         .into_iter()
-        .map(|message| ChatMessage {
-            id: Uuid::new_v4(),
-            role: match message.role.as_str() {
-                "system" => ChatRole::System,
-                "assistant" => ChatRole::Assistant,
-                "tool" => ChatRole::Tool,
-                _ => ChatRole::User,
-            },
-            content: message.content,
-            created_at: Utc::now(),
+        .map(|message| {
+            let content = message.content.unwrap_or_default();
+            ChatMessage {
+                id: Uuid::new_v4(),
+                role: match message.role.as_str() {
+                    "system" => ChatRole::System,
+                    "assistant" => ChatRole::Assistant,
+                    "tool" => ChatRole::Tool,
+                    _ => ChatRole::User,
+                },
+                content,
+                created_at: Utc::now(),
+            }
         })
         .collect::<Vec<_>>();
-
     if body.use_documents.unwrap_or(true) {
         let storage = state.storage.lock().await;
         augment_messages_with_document_context(&storage, &mut messages);
