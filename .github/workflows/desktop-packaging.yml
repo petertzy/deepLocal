@@ -2,18 +2,59 @@ name: Desktop packaging
 
 on:
   workflow_dispatch:
+    inputs:
+      windows:
+        description: "Build Windows installer"
+        type: boolean
+        default: true
+      linux:
+        description: "Build Linux packages"
+        type: boolean
+        default: true
+      macos:
+        description: "Build macOS packages"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
+  select-platforms:
+    name: Select target platforms
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.select.outputs.runners }}
+    steps:
+      - name: Build runner matrix
+        id: select
+        env:
+          BUILD_WINDOWS: ${{ inputs.windows }}
+          BUILD_LINUX: ${{ inputs.linux }}
+          BUILD_MACOS: ${{ inputs.macos }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runners=()
+          [[ "$BUILD_WINDOWS" == "true" ]] && runners+=('"windows-2022"')
+          [[ "$BUILD_LINUX" == "true" ]] && runners+=('"ubuntu-22.04"')
+          [[ "$BUILD_MACOS" == "true" ]] && runners+=('"macos-15"')
+          if (( ${#runners[@]} == 0 )); then
+            echo "Select at least one platform." >&2
+            exit 1
+          fi
+          matrix="$(IFS=,; echo "[${runners[*]}]")"
+          echo "runners=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Selected runners: $matrix" >> "$GITHUB_STEP_SUMMARY"
+
   package:
+    needs: select-platforms:
     name: Package ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-15]
+        os: ${{ fromJSON(needs.select-platforms.outputs.runners) }}
     defaults:
       run:
         working-directory: .
