@@ -43,6 +43,7 @@ def parse_sse(response):
             text = "\n".join(pending)
             pending = []
             if text == "[DONE]":
+                yield {"_done": True}
                 return
             yield json.loads(text)
     if pending:
@@ -56,6 +57,9 @@ def collect_stream(response):
     finish_reason = None
     completed = False
     for chunk in parse_sse(response):
+        if chunk.get("_done"):
+            completed = True
+            break
         if "error" in chunk:
             raise RuntimeError(f"Stream error: {chunk['error']}")
         for choice in chunk.get("choices", []):
@@ -70,6 +74,8 @@ def collect_stream(response):
                 current["id"] += part.get("id", "")
                 current["function"]["name"] += part.get("function", {}).get("name", "")
                 current["function"]["arguments"] += part.get("function", {}).get("arguments", "")
+    if not completed:
+        raise RuntimeError("SSE stream ended without [DONE]")
     return finish_reason, [calls[index] for index in sorted(calls)]
 
 
