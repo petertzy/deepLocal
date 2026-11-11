@@ -226,8 +226,16 @@ fn collect_gguf_files_inner(directory: &PathBuf, files: &mut Vec<PathBuf>) -> an
     Ok(())
 }
 
+fn bundled_llama_server_name() -> &'static str {
+    if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    }
+}
+
 fn configure_llama_server(resources: &PathBuf) {
-    let mut candidates = vec![resources.join("llama-runtime").join("llama-server")];
+    let mut candidates = vec![resources.join("llama-runtime").join(bundled_llama_server_name())];
     if let Some(path) = std::env::var_os("DEEPLOCAL_LLAMA_SERVER") {
         candidates.push(PathBuf::from(path));
     }
@@ -253,7 +261,18 @@ fn configure_llama_server(resources: &PathBuf) {
 
 #[cfg(test)]
 mod tests {
-    use super::API_HOST;
+    use super::{bundled_llama_server_name, API_HOST};
+
+    #[test]
+    fn bundled_llama_server_uses_platform_executable_name() {
+        let expected = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        assert_eq!(bundled_llama_server_name(), expected);
+    }
+
 
     #[tokio::test]
     async fn packaged_api_uses_an_os_assigned_loopback_port() {
