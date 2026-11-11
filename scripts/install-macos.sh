@@ -27,15 +27,53 @@ command -v unzip >/dev/null 2>&1 || {
   exit 1
 }
 
+# Resolve the ZIP asset from release metadata instead of assuming a fixed name.
+# Current releases use versioned assets (deepLocal_0.1.15_macos.zip), while
+# older releases used deepLocal-macos.zip.
 if [[ "$VERSION" == "latest" ]]; then
-  DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/deepLocal-macos.zip"
+  RELEASE_API="https://api.github.com/repos/$REPO/releases/latest"
 else
-  DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/deepLocal-macos.zip"
+  RELEASE_API="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
 fi
+
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required to resolve the latest deepLocal release asset." >&2
+  exit 1
+}
+
+echo "Checking deepLocal release assets..."
+curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
+  "$RELEASE_API" -o "$TMP_DIR/release.json" || {
+  echo "Could not fetch release metadata from $RELEASE_API" >&2
+  exit 1
+}
+
+DOWNLOAD_URL="$(python3 - "$TMP_DIR/release.json" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as release_file:
+    release = json.load(release_file)
+
+assets = release.get("assets", [])
+matches = [
+    asset for asset in assets
+    if asset.get("name") == "deepLocal-macos.zip"
+    or re.fullmatch(r"deepLocal_[0-9]+\.[0-9]+\.[0-9]+_macos\.zip", asset.get("name", ""))
+]
+if len(matches) != 1:
+    sys.exit("Expected exactly one macOS ZIP asset in the selected deepLocal release.")
+url = matches[0].get("browser_download_url", "")
+if not url.startswith("https://github.com/petertzy/deepLocal/releases/download/"):
+    sys.exit("Unexpected deepLocal release asset URL.")
+print(url)
+PY
+)"
 
 echo "Downloading deepLocal from:"
 echo "  $DOWNLOAD_URL"
-curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/deepLocal-macos.zip"
+curl -fL --retry 3 --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/deepLocal-macos.zip"
 
 echo "Extracting deepLocal..."
 unzip -q "$TMP_DIR/deepLocal-macos.zip" -d "$TMP_DIR"
