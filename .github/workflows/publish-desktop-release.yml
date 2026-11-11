@@ -21,7 +21,7 @@ jobs:
     name: Publish desktop installers
     runs-on: ubuntu-latest
     steps:
-      - name: Select latest successful packaging run
+      - name: Select successful packaging run
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,12 +143,14 @@ jobs:
             for file in "${files[@]}"; do
               name="$(basename "$file")"
               if grep -Fxq "$name" "$RUNNER_TEMP/existing-assets.txt"; then
-                echo "Installer $name already exists in $RELEASE_TAG; refusing to overwrite it." >&2
-                exit 1
+                echo "Skipping existing installer $name in $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+                continue
               fi
               new_files+=("$file")
             done
-            gh release upload "$RELEASE_TAG" "${new_files[@]}" --repo "$GH_REPO"
+            if (( ${#new_files[@]} > 0 )); then
+              gh release upload "$RELEASE_TAG" "${new_files[@]}" --repo "$GH_REPO"
+            fi
             echo "Added ${#new_files[@]} installer(s) to $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
           else
             gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Desktop installers for the selected platforms."
