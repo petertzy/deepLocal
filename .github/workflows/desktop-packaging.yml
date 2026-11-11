@@ -36,9 +36,15 @@ jobs:
         run: |
           set -euo pipefail
           runners=()
-          [[ "$BUILD_WINDOWS" == "true" ]] && runners+=('"windows-2022"')
-          [[ "$BUILD_LINUX" == "true" ]] && runners+=('"ubuntu-22.04"')
-          [[ "$BUILD_MACOS" == "true" ]] && runners+=('"macos-15"')
+          if [[ "$BUILD_WINDOWS" == "true" ]]; then
+            runners+=('"windows-2022"')
+          fi
+          if [[ "$BUILD_LINUX" == "true" ]]; then
+            runners+=('"ubuntu-22.04"')
+          fi
+          if [[ "$BUILD_MACOS" == "true" ]]; then
+            runners+=('"macos-15"')
+          fi
           if (( ${#runners[@]} == 0 )); then
             echo "Select at least one platform." >&2
             exit 1
@@ -48,7 +54,7 @@ jobs:
           echo "Selected runners: $matrix" >> "$GITHUB_STEP_SUMMARY"
 
   package:
-    needs: select-platforms:
+    needs: select-platforms
     name: Package ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
