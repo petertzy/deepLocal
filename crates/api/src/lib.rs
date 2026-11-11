@@ -3905,6 +3905,25 @@ fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_jso
     if let Some(payload) = remainder.strip_prefix("[TOOL_REQUEST]") {
         let payload = payload.trim().strip_suffix("[END_TOOL_REQUEST]")
             .unwrap_or(payload.trim()).trim();
+        if !payload.contains(['{', '}', '[', ']']) {
+            let matching = tools.iter().filter(|tool| {
+                tool.kind == "function" && tool.function.name == payload
+                    && tool.function.parameters.as_ref().is_some_and(|parameters| {
+                        parameters.get("type").and_then(|value| value.as_str()) == Some("object")
+                            && parameters.get("properties").and_then(|value| value.as_object())
+                                .is_some_and(|properties| properties.is_empty())
+                            && parameters.get("required").and_then(|value| value.as_array())
+                                .is_none_or(|required| required.is_empty())
+                    })
+            }).collect::<Vec<_>>();
+            if matching.len() == 1 {
+                return Some(vec![serde_json::json!({
+                    "id": format!("call_{}", Uuid::new_v4().simple()),
+                    "type": "function",
+                    "function": { "name": payload, "arguments": "{}" }
+                })]);
+            }
+        }
         let normalized = payload.replace(['“', '”'], "\"");
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&normalized) {
             if let Some(name) = value.get("name").and_then(|name| name.as_str()) {
@@ -4018,6 +4037,8 @@ mod openai_tool_protocol_tests {
                 parameters: Some(serde_json::json!({ "type": "object", "properties": {} })),
             },
         }];
+        assert!(parse_tool_requests("[TOOL_REQUEST]get_time\\n", &zero_arg).is_some());
+        assert!(parse_tool_requests("[TOOL_REQUEST]unknown", &zero_arg).is_none());
         let output = "[TOOL_REQUEST]{“name”: “get_time”}\\n";
         let calls = parse_tool_requests(output, &zero_arg).expect("unambiguous zero-arg call");
         assert_eq!(calls[0]["function"]["name"], "get_time");
