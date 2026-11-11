@@ -70,28 +70,27 @@ jobs:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
-      - name: Determine next release version
+      - name: Determine release version
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
-          if [[ -n "${REQUESTED_VERSION:-}" ]]; then
-            [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || {
               echo "Invalid release version: $REQUESTED_VERSION" >&2
               exit 1
             }
             version="$REQUESTED_VERSION"
             echo "Packaging additional platforms for $version" >> "$GITHUB_STEP_SUMMARY"
           else
-            version="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+
-          if [[ -z "$version" ]]; then
-            echo "No existing semantic-version releases found; refusing to guess a version." >&2
-            exit 1
-          else
+            version="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' | sort -V | tail -n 1 || true)"
+            [[ -n "$version" ]] || {
+              echo "No existing semantic-version releases found; refusing to guess a version." >&2
+              exit 1
+            }
             version="$(awk -F. '{printf "v%d.%d.%d", substr($1,2),$2,$3+1}' <<< "$version")"
-          fi
           fi
           echo "DEEPLOCAL_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
           echo "$version" > release-version.txt
