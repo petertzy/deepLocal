@@ -139,6 +139,8 @@ jobs:
       - name: Package macOS
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/package-macos-app.sh
 
       - name: Package Linux

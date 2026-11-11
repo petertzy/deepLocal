@@ -68,9 +68,15 @@ prepare_llama_runtime() {
 const arch = process.argv[2];
 const pattern = new RegExp(`^llama-.+-bin-macos-${arch}\\.tar\\.gz$`);
 fetch('https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10', {
-  headers: { 'User-Agent': 'deepLocal-macOS-Packager' },
+  headers: {
+    'User-Agent': 'deepLocal-macOS-Packager',
+    'Accept': 'application/vnd.github+json',
+    ...(process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+      ? { Authorization: `Bearer ${process.env.GH_TOKEN || process.env.GITHUB_TOKEN}` }
+      : {}),
+  },
 }).then(response => {
-  if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
+  if (!response.ok) throw new Error(`GitHub API returned ${response.status}. Check the API rate limit and GH_TOKEN.`);
   return response.json();
 }).then(releases => {
   const asset = releases
@@ -234,11 +240,12 @@ const [sourcePath, targetPath] = process.argv.slice(2);
 const config = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
 if (process.env.DEEPLOCAL_RELEASE_VERSION) config.version = process.env.DEEPLOCAL_RELEASE_VERSION.replace(/^v/, '');
 config.bundle.createUpdaterArtifacts = false;
+config.bundle.macOS = { ...config.bundle.macOS, signingIdentity: null };
 if (config.plugins) delete config.plugins.updater;
 fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
 NODE
   TAURI_BUILD_COMMAND="npm run tauri:build -- --config $PACKAGING_CONFIG"
-  echo "TAURI_SIGNING_PRIVATE_KEY is not set; building an unsigned local app without updater artifacts."
+  echo "Building without an Apple Developer identity, notarization, or updater artifacts."
 fi
 (
   cd "$DESKTOP_DIR"
