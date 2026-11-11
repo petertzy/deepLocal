@@ -3895,7 +3895,7 @@ fn normalize_native_chat_messages(messages: Vec<serde_json::Value>) -> Vec<serde
                         .is_none_or(|calls| calls.is_empty())
                 {
                     if let Some(existing) = previous.get("content").and_then(|value| value.as_str()) {
-                        let combined = format!("{existing}\\n\\n{}", content.unwrap_or_default());
+                        let combined = format!("{existing}\n\n{}", content.unwrap_or_default());
                         previous["content"] = serde_json::Value::String(combined);
                         continue;
                     }
@@ -3906,7 +3906,7 @@ fn normalize_native_chat_messages(messages: Vec<serde_json::Value>) -> Vec<serde
     }
     if !system.is_empty() {
         conversation.insert(0, serde_json::json!({
-            "role": "system", "content": system.join("\\n\\n")
+            "role": "system", "content": system.join("\n\n")
         }));
     }
     conversation
@@ -4028,9 +4028,9 @@ mod openai_native_tool_tests {
         let normalized = normalize_native_chat_messages(messages);
         assert_eq!(normalized.len(), 4);
         assert_eq!(normalized[0]["role"], "system");
-        assert_eq!(normalized[0]["content"], "Agent rules\\n\\nSubagent instructions");
+        assert_eq!(normalized[0]["content"], "Agent rules\n\nSubagent instructions");
         assert_eq!(normalized[3]["role"], "user");
-        assert_eq!(normalized[3]["content"], "Create a game\\n\\nAdditional requirements");
+        assert_eq!(normalized[3]["content"], "Create a game\n\nAdditional requirements");
     }
 
     #[test]
