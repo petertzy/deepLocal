@@ -60,7 +60,7 @@ assets = release.get("assets", [])
 matches = [
     asset for asset in assets
     if asset.get("name") == "deepLocal-macos.zip"
-    or re.fullmatch(r"deepLocal_[0-9]+\\.[0-9]+\\.[0-9]+_macos\\.zip", asset.get("name", ""))
+    or re.fullmatch(r"deepLocal_[0-9]+\.[0-9]+\.[0-9]+_macos\.zip", asset.get("name", ""))
 ]
 if len(matches) != 1:
     sys.exit("Expected exactly one macOS ZIP asset in the selected deepLocal release.")
