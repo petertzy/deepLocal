@@ -166,8 +166,6 @@ def main():
         continuation = {
             "model": model,
             "messages": history,
-            "tools": tools,
-            "tool_choice": "none",
             "stream": False,
             "max_tokens": 256,
             "temperature": 0,
