@@ -6,6 +6,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use tauri::{Manager, RunEvent, State, WindowEvent};
 
 const API_HOST: &str = "127.0.0.1";
+const API_PORT: u16 = 14567;
 const MAX_DOCUMENT_BYTES: u64 = 8 * 1024 * 1024;
 
 struct ApiAddress(String);
@@ -27,13 +28,11 @@ fn main() -> anyhow::Result<()> {
                 .map_err(|error| anyhow::anyhow!(error))?;
             configure_llama_server(&resource_dir);
 
-            let listener =
-                tauri::async_runtime::block_on(tokio::net::TcpListener::bind((API_HOST, 0)))?;
-            let port = listener.local_addr()?.port();
-            app.manage(ApiAddress(format!("http://{API_HOST}:{port}")));
+            let listener = tauri::async_runtime::block_on(bind_api_listener(API_HOST, API_PORT))?;
+            app.manage(ApiAddress(format!("http://{API_HOST}:{API_PORT}")));
             let runtime = RuntimeManager::default();
             app.manage(RuntimeState(runtime.clone()));
-            tauri::async_runtime::spawn(start_api(models_directory, listener, port, runtime));
+            tauri::async_runtime::spawn(start_api(models_directory, listener, API_PORT, runtime));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![api_base_url, read_local_document])
@@ -53,6 +52,16 @@ fn main() -> anyhow::Result<()> {
         }
     });
     Ok(())
+}
+
+async fn bind_api_listener(host: &str, port: u16) -> anyhow::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind((host, port))
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "Could not start the deepLocal API on {host}:{port}: {error}. Close the application using this port and restart deepLocal."
+            )
+        })
 }
 
 #[tauri::command]
@@ -261,7 +270,7 @@ fn configure_llama_server(resources: &PathBuf) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled_llama_server_name, API_HOST};
+    use super::{bind_api_listener, bundled_llama_server_name, API_HOST, API_PORT};
 
     #[test]
     fn bundled_llama_server_uses_platform_executable_name() {
@@ -274,15 +283,24 @@ mod tests {
     }
 
 
-    #[tokio::test]
-    async fn packaged_api_uses_an_os_assigned_loopback_port() {
-        let listener = tokio::net::TcpListener::bind((API_HOST, 0))
-            .await
-            .expect("bind an OS-assigned port");
-        let address = listener.local_addr().expect("read assigned address");
+    #[test]
+    fn packaged_api_uses_the_documented_loopback_port() {
+        assert_eq!(API_HOST, "127.0.0.1");
+        assert_eq!(API_PORT, 14567);
+    }
 
-        assert_eq!(address.ip().to_string(), API_HOST);
-        assert_ne!(address.port(), 0);
-        assert_ne!(address.port(), 14567);
+    #[tokio::test]
+    async fn api_listener_reports_port_conflicts_without_falling_back() {
+        let listener = bind_api_listener(API_HOST, 0)
+            .await
+            .expect("bind an available loopback port");
+        let port = listener.local_addr().expect("read bound address").port();
+
+        let error = bind_api_listener(API_HOST, port)
+            .await
+            .expect_err("the occupied port must not be replaced with a random port");
+        let message = error.to_string();
+        assert!(message.contains(&format!("{API_HOST}:{port}")));
+        assert!(message.contains("Close the application using this port"));
     }
 }
