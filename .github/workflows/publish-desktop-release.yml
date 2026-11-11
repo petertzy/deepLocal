@@ -51,12 +51,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t manifests < <(find "$RUNNER_TEMP/installers" -name release-version.txt -type f)
-          [[ "${#manifests[@]}" == 3 ]] || { echo "Expected three version manifests." >&2; exit 1; }
+          mapfile -t manifests < <(find "$RUNNER_TEMP/installers" -name release-version.txt -type f | sort)
+          (( ${#manifests[@]} >= 1 && ${#manifests[@]} <= 3 )) || {
+            echo "Expected between one and three version manifests." >&2
+            exit 1
+          }
           version="$(cat "${manifests[0]}")"
           [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-          [[ "$(cat "${manifests[1]}")" == "$version" ]] || { echo "Package versions differ." >&2; exit 1; }
-          [[ "$(cat "${manifests[2]}")" == "$version" ]] || { echo "Package versions differ." >&2; exit 1; }
+          for manifest in "${manifests[@]}"; do
+            [[ "$(cat "$manifest")" == "$version" ]] || {
+              echo "Package versions differ." >&2
+              exit 1
+            }
+          done
           if gh release view "$version" >/dev/null 2>&1; then
             echo "Release $version already exists. Refusing to overwrite it." >&2
             exit 1
@@ -77,11 +84,26 @@ jobs:
           (("${#files[@]}" > 0)) || { echo "No installer files were downloaded." >&2; exit 1; }
           find . -type f | sort
           find . -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) -exec sha256sum {} +
-          test "$(find . -type f -name '*.exe' | wc -l)" -gt 0 || { echo "Windows installer is missing." >&2; exit 1; }
-          test "$(find . -type f -name '*.deb' | wc -l)" -gt 0 || { echo "Linux DEB is missing." >&2; exit 1; }
-          test "$(find . -type f -name '*.AppImage' | wc -l)" -gt 0 || { echo "Linux AppImage is missing." >&2; exit 1; }
-          test "$(find . -type f -name 'deepLocal-macos.zip' | wc -l)" -gt 0 || { echo "macOS ZIP is missing." >&2; exit 1; }
-          test "$(find . -type f -name 'deepLocal-macos.dmg' | wc -l)" -gt 0 || { echo "macOS DMG is missing." >&2; exit 1; }
+          for artifact_dir in deeplocal-*; do
+            [[ -d "$artifact_dir" ]] || continue
+            case "$artifact_dir" in
+              deeplocal-Windows-*)
+                find "$artifact_dir" -type f -name '*.exe' | grep -q . || { echo "Windows installer is missing." >&2; exit 1; }
+                ;;
+              deeplocal-Linux-*)
+                find "$artifact_dir" -type f -name '*.deb' | grep -q . || { echo "Linux DEB is missing." >&2; exit 1; }
+                find "$artifact_dir" -type f -name '*.AppImage' | grep -q . || { echo "Linux AppImage is missing." >&2; exit 1; }
+                ;;
+              deeplocal-macOS-*)
+                find "$artifact_dir" -type f -name 'deepLocal-macos.zip' | grep -q . || { echo "macOS ZIP is missing." >&2; exit 1; }
+                find "$artifact_dir" -type f -name 'deepLocal-macos.dmg' | grep -q . || { echo "macOS DMG is missing." >&2; exit 1; }
+                ;;
+              *)
+                echo "Unexpected packaging artifact: $artifact_dir" >&2
+                exit 1
+                ;;
+            esac
+          done
           mkdir -p "$RUNNER_TEMP/upload"
           for file in "${files[@]}"; do
             name="$(basename "$file")"
@@ -100,5 +122,5 @@ jobs:
           shopt -s nullglob
           files=("$RUNNER_TEMP"/upload/*)
           (("${#files[@]}" > 0)) || exit 1
-          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Windows, Linux, and macOS desktop installers."
+          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO" --target "${{ steps.resolve.outputs.run_sha }}" --title "deepLocal $RELEASE_TAG" --notes "Desktop installers for the selected platforms."
           gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
