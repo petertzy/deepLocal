@@ -3870,7 +3870,7 @@ fn tool_prompt(tools: &[OpenAiTool]) -> String {
         "parameters": tool.function.parameters,
     })).collect::<Vec<_>>();
     format!(
-        "You may call these functions: {}\\nTo call a function, output only one or more blocks of this exact form: [TOOL_REQUEST]{{\\\"name\\\":\\\"function_name\\\",\\\"arguments\\\":{{}}}}[END_TOOL_REQUEST]. Do not invent function names. If no function is needed, answer normally.",
+        "You may call these functions: {}\nTo call a function, output only one or more blocks of this exact form: [TOOL_REQUEST]{{\"name\":\"function_name\",\"arguments\":{{}}}}[END_TOOL_REQUEST]. Do not invent function names. If no function is needed, answer normally.",
         serde_json::Value::Array(definitions)
     )
 }
@@ -3897,6 +3897,40 @@ fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_jso
     if !calls.is_empty() && remainder.is_empty() { Some(calls) } else { None }
 }
 
+#[cfg(test)]
+mod openai_tool_protocol_tests {
+    use super::*;
+
+    fn tools() -> Vec<OpenAiTool> {
+        vec![OpenAiTool {
+            kind: "function".to_string(),
+            function: OpenAiFunction {
+                name: "read_file".to_string(),
+                description: Some("Read a file".to_string()),
+                parameters: Some(serde_json::json!({ "type": "object" })),
+            },
+        }]
+    }
+
+    #[test]
+    fn parses_valid_tool_requests_and_rejects_unlisted_functions() {
+        let valid = r#"[TOOL_REQUEST]{"name":"read_file","arguments":{"path":"README.md"}}[END_TOOL_REQUEST]"#;
+        let calls = parse_tool_requests(valid, &tools()).expect("valid tool call");
+        assert_eq!(calls[0]["function"]["name"], "read_file");
+        assert_eq!(calls[0]["function"]["arguments"], r#"{"path":"README.md"}"#);
+        assert!(parse_tool_requests(valid.replace("read_file", "delete_file").as_str(), &tools()).is_none());
+        assert!(parse_tool_requests("[TOOL_REQUEST]{bad}[END_TOOL_REQUEST]", &tools()).is_none());
+        assert!(parse_tool_requests("Hello", &tools()).is_none());
+    }
+
+    #[test]
+    fn tool_prompt_includes_declared_functions() {
+        let prompt = tool_prompt(&tools());
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("[TOOL_REQUEST]"));
+    }
+}
+
 async fn chat_completions(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<OpenAiChatRequest>,
@@ -3910,7 +3944,7 @@ async fn chat_completions(
             if !message.tool_calls.is_empty() {
                 for call in message.tool_calls {
                     content.push_str(&format!(
-                        "\\n[TOOL_REQUEST]{{\\\"name\\\":{},\\\"arguments\\\":{}}}[END_TOOL_REQUEST]",
+                        "\\n[TOOL_REQUEST]{{\"name\":{},\"arguments\":{}}}[END_TOOL_REQUEST]",
                         serde_json::json!(call.function.name), call.function.arguments
                     ));
                 }
