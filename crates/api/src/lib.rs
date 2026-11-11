@@ -3862,6 +3862,14 @@ where
     }
 }
 
+// A continuation may contain tool-call history even if no new tools are
+// offered. Keep those turns on the native chat-template path as well.
+fn requires_native_chat(request: &OpenAiChatRequest) -> bool {
+    !request.tools.is_empty() || request.messages.iter().any(|message| {
+        message.role == "tool" || !message.tool_calls.is_empty()
+    })
+}
+
 // Preserve the upstream llama.cpp tool-call protocol instead of guessing tools
 // from generated text. llama-server applies native or generic Jinja templates.
 fn native_tool_payload(
@@ -3993,6 +4001,10 @@ mod openai_native_tool_tests {
         assert_eq!(payload["messages"][1]["role"], "tool");
         assert_eq!(payload["messages"][1]["tool_call_id"], "call_1");
         assert_eq!(payload["stream"], true);
+        assert!(requires_native_chat(&request));
+        let mut continuation_without_tools = request;
+        continuation_without_tools.tools.clear();
+        assert!(requires_native_chat(&continuation_without_tools));
     }
 }
 
@@ -4000,7 +4012,7 @@ async fn chat_completions(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<OpenAiChatRequest>,
 ) -> impl IntoResponse {
-    if !body.tools.is_empty() {
+    if requires_native_chat(&body) {
         return native_tool_chat_completions(&state, &body).await;
     }
     let mut messages = body
