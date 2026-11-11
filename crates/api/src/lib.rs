@@ -3900,6 +3900,39 @@ fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_jso
             })]);
         }
     }
+    // Small models sometimes omit the closing marker and arguments, or emit
+    // typographic quotes. Accept only a standalone, unambiguous zero-arg call.
+    if let Some(payload) = remainder.strip_prefix("[TOOL_REQUEST]") {
+        let payload = payload.trim().strip_suffix("[END_TOOL_REQUEST]")
+            .unwrap_or(payload.trim()).trim();
+        let normalized = payload.replace(['“', '”'], "\"");
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&normalized) {
+            if let Some(name) = value.get("name").and_then(|name| name.as_str()) {
+                if value.as_object().is_some_and(|object| {
+                    object.keys().all(|key| key == "name" || key == "arguments")
+                        && object.get("arguments").is_none_or(|args| args.as_object().is_some_and(|a| a.is_empty()))
+                }) {
+                    let matching = tools.iter().filter(|tool| {
+                        tool.kind == "function" && tool.function.name == name
+                            && tool.function.parameters.as_ref().is_some_and(|parameters| {
+                                parameters.get("type").and_then(|value| value.as_str()) == Some("object")
+                                    && parameters.get("properties").and_then(|value| value.as_object())
+                                        .is_some_and(|properties| properties.is_empty())
+                                    && parameters.get("required").and_then(|value| value.as_array())
+                                        .is_none_or(|required| required.is_empty())
+                            })
+                    }).collect::<Vec<_>>();
+                    if matching.len() == 1 {
+                        return Some(vec![serde_json::json!({
+                            "id": format!("call_{}", Uuid::new_v4().simple()),
+                            "type": "function",
+                            "function": { "name": name, "arguments": "{}" }
+                        })]);
+                    }
+                }
+            }
+        }
+    }
     let mut calls = Vec::new();
     while let Some(start) = remainder.strip_prefix("[TOOL_REQUEST]") {
         let (json, rest) = start.split_once("[END_TOOL_REQUEST]")?;
@@ -3973,6 +4006,24 @@ mod openai_tool_protocol_tests {
             },
         }];
         assert!(parse_tool_requests("[GET_TIME]", &with_arguments).is_none());
+    }
+
+    #[test]
+    fn parses_incomplete_zero_argument_request_with_typographic_quotes() {
+        let zero_arg = vec![OpenAiTool {
+            kind: "function".to_string(),
+            function: OpenAiFunction {
+                name: "get_time".to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({ "type": "object", "properties": {} })),
+            },
+        }];
+        let output = "[TOOL_REQUEST]{“name”: “get_time”}\\n";
+        let calls = parse_tool_requests(output, &zero_arg).expect("unambiguous zero-arg call");
+        assert_eq!(calls[0]["function"]["name"], "get_time");
+        assert_eq!(calls[0]["function"]["arguments"], "{}");
+        assert!(parse_tool_requests("[TOOL_REQUEST]{“name”: “unknown”}", &zero_arg).is_none());
+        assert!(parse_tool_requests("[TOOL_REQUEST]{“name”: “get_time”} trailing", &zero_arg).is_none());
     }
 
     #[test]
