@@ -3814,7 +3814,7 @@ pub struct OpenAiFunction {
     pub parameters: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -3822,7 +3822,7 @@ pub struct OpenAiToolCall {
     pub function: OpenAiToolCallFunction,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiToolCallFunction {
     pub name: String,
     pub arguments: String,
