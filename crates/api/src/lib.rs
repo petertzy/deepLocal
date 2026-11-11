@@ -3877,6 +3877,29 @@ fn tool_prompt(tools: &[OpenAiTool]) -> String {
 
 fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_json::Value>> {
     let mut remainder = text.trim();
+    // Some GGUF chat templates emit a bracketed function name instead of the
+    // fallback JSON protocol. Only accept an exact match for a declared,
+    // zero-argument function; never infer or fabricate missing arguments.
+    if let Some(name) = remainder.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let matching = tools.iter().filter(|tool| {
+            tool.kind == "function"
+                && tool.function.name.eq_ignore_ascii_case(name)
+                && tool.function.parameters.as_ref().is_some_and(|parameters| {
+                    parameters.get("type").and_then(|value| value.as_str()) == Some("object")
+                        && parameters.get("properties").and_then(|value| value.as_object())
+                            .is_some_and(|properties| properties.is_empty())
+                        && parameters.get("required").and_then(|value| value.as_array())
+                            .is_none_or(|required| required.is_empty())
+                })
+        }).collect::<Vec<_>>();
+        if matching.len() == 1 {
+            return Some(vec![serde_json::json!({
+                "id": format!("call_{}", Uuid::new_v4().simple()),
+                "type": "function",
+                "function": { "name": matching[0].function.name, "arguments": "{}" }
+            })]);
+        }
+    }
     let mut calls = Vec::new();
     while let Some(start) = remainder.strip_prefix("[TOOL_REQUEST]") {
         let (json, rest) = start.split_once("[END_TOOL_REQUEST]")?;
@@ -3921,6 +3944,35 @@ mod openai_tool_protocol_tests {
         assert!(parse_tool_requests(valid.replace("read_file", "delete_file").as_str(), &tools()).is_none());
         assert!(parse_tool_requests("[TOOL_REQUEST]{bad}[END_TOOL_REQUEST]", &tools()).is_none());
         assert!(parse_tool_requests("Hello", &tools()).is_none());
+    }
+
+    #[test]
+    fn parses_exact_bracketed_zero_argument_function_names() {
+        let zero_arg = vec![OpenAiTool {
+            kind: "function".to_string(),
+            function: OpenAiFunction {
+                name: "get_time".to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({ "type": "object", "properties": {} })),
+            },
+        }];
+        let calls = parse_tool_requests("[GET_TIME]\\n", &zero_arg).expect("declared zero-arg function");
+        assert_eq!(calls[0]["function"]["name"], "get_time");
+        assert_eq!(calls[0]["function"]["arguments"], "{}");
+        assert!(parse_tool_requests("[DELETE_FILE]", &zero_arg).is_none());
+        assert!(parse_tool_requests("[GET_TIME] extra text", &zero_arg).is_none());
+        let with_arguments = vec![OpenAiTool {
+            kind: "function".to_string(),
+            function: OpenAiFunction {
+                name: "get_time".to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": { "timezone": { "type": "string" } }
+                })),
+            },
+        }];
+        assert!(parse_tool_requests("[GET_TIME]", &with_arguments).is_none());
     }
 
     #[test]
