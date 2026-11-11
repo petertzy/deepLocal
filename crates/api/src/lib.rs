@@ -3795,12 +3795,47 @@ pub struct OpenAiChatRequest {
     pub stop: Vec<String>,
     pub seed: Option<u64>,
     pub use_documents: Option<bool>,
+    #[serde(default)]
+    pub tools: Vec<OpenAiTool>,
+    pub tool_choice: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiTool {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: OpenAiFunction,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiFunction {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: OpenAiToolCallFunction,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Vec<OpenAiToolCall>,
 }
 
 fn deserialize_stop_sequences<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -3826,25 +3861,83 @@ where
     }
 }
 
+// Fallback tool protocol for GGUF chat templates without native function calling.
+// The desktop API converts validated tool requests to OpenAI-compatible output.
+fn tool_prompt(tools: &[OpenAiTool]) -> String {
+    let definitions = tools.iter().map(|tool| serde_json::json!({
+        "name": tool.function.name,
+        "description": tool.function.description,
+        "parameters": tool.function.parameters,
+    })).collect::<Vec<_>>();
+    format!(
+        "You may call these functions: {}\\nTo call a function, output only one or more blocks of this exact form: [TOOL_REQUEST]{{\\\"name\\\":\\\"function_name\\\",\\\"arguments\\\":{{}}}}[END_TOOL_REQUEST]. Do not invent function names. If no function is needed, answer normally.",
+        serde_json::Value::Array(definitions)
+    )
+}
+
+fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_json::Value>> {
+    let mut remainder = text.trim();
+    let mut calls = Vec::new();
+    while let Some(start) = remainder.strip_prefix("[TOOL_REQUEST]") {
+        let (json, rest) = start.split_once("[END_TOOL_REQUEST]")?;
+        let value: serde_json::Value = serde_json::from_str(json.trim()).ok()?;
+        let name = value.get("name")?.as_str()?;
+        if !tools.iter().any(|tool| tool.kind == "function" && tool.function.name == name) {
+            return None;
+        }
+        let args = value.get("arguments")?;
+        if !args.is_object() { return None; }
+        calls.push(serde_json::json!({
+            "id": format!("call_{}", Uuid::new_v4().simple()),
+            "type": "function",
+            "function": { "name": name, "arguments": args.to_string() }
+        }));
+        remainder = rest.trim();
+    }
+    if !calls.is_empty() && remainder.is_empty() { Some(calls) } else { None }
+}
+
 async fn chat_completions(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<OpenAiChatRequest>,
 ) -> impl IntoResponse {
+    let tools = body.tools;
     let mut messages = body
         .messages
         .into_iter()
-        .map(|message| ChatMessage {
-            id: Uuid::new_v4(),
-            role: match message.role.as_str() {
-                "system" => ChatRole::System,
-                "assistant" => ChatRole::Assistant,
-                "tool" => ChatRole::Tool,
-                _ => ChatRole::User,
-            },
-            content: message.content,
-            created_at: Utc::now(),
+        .map(|message| {
+            let mut content = message.content.unwrap_or_default();
+            if !message.tool_calls.is_empty() {
+                for call in message.tool_calls {
+                    content.push_str(&format!(
+                        "\\n[TOOL_REQUEST]{{\\\"name\\\":{},\\\"arguments\\\":{}}}[END_TOOL_REQUEST]",
+                        serde_json::json!(call.function.name), call.function.arguments
+                    ));
+                }
+            }
+            if let Some(id) = message.tool_call_id {
+                content = format!("Tool result for {id}: {content}");
+            }
+            ChatMessage {
+                id: Uuid::new_v4(),
+                role: match message.role.as_str() {
+                    "system" => ChatRole::System,
+                    "assistant" => ChatRole::Assistant,
+                    // The fallback prompt protocol uses plain-text tool results.
+                    "tool" => ChatRole::User,
+                    _ => ChatRole::User,
+                },
+                content,
+                created_at: Utc::now(),
+            }
         })
         .collect::<Vec<_>>();
+    if !tools.is_empty() {
+        messages.insert(0, ChatMessage {
+            id: Uuid::new_v4(), role: ChatRole::System,
+            content: tool_prompt(&tools), created_at: Utc::now(),
+        });
+    }
 
     if body.use_documents.unwrap_or(true) {
         let storage = state.storage.lock().await;
@@ -3866,6 +3959,51 @@ async fn chat_completions(
         },
         stream: body.stream,
     };
+
+    if !tools.is_empty() {
+        // Buffer tool-enabled generations so partial JSON is never exposed as
+        // assistant prose or executed as an incomplete tool call.
+        let mut output = String::new();
+        let mut generated = match state.runtime.generate(request).await {
+            Ok(stream) => stream,
+            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        };
+        while let Some(token) = generated.next().await {
+            match token {
+                Ok(token) => output.push_str(&token.text),
+                Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+            }
+        }
+        let calls = parse_tool_requests(&output, &tools);
+        let finish_reason = if calls.is_some() { "tool_calls" } else { "stop" };
+        let content = if calls.is_some() { serde_json::Value::Null } else { serde_json::json!(output) };
+        let id = format!("chatcmpl-{}", Uuid::new_v4());
+        let created = Utc::now().timestamp();
+        if body.stream {
+            let delta = if let Some(calls) = calls {
+                serde_json::json!({ "tool_calls": calls.into_iter().enumerate().map(|(index, call)| serde_json::json!({
+                    "index": index, "id": call["id"], "type": "function", "function": call["function"]
+                })).collect::<Vec<_>>() })
+            } else { serde_json::json!({ "content": content }) };
+            let events = vec![
+                Ok::<_, Infallible>(Event::default().data(serde_json::json!({
+                    "id": id, "object": "chat.completion.chunk", "created": created, "model": body.model,
+                    "choices": [{ "index": 0, "delta": delta, "finish_reason": serde_json::Value::Null }]
+                }).to_string())),
+                Ok(Event::default().data(serde_json::json!({
+                    "id": id, "object": "chat.completion.chunk", "created": created, "model": body.model,
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+                }).to_string())),
+                Ok(Event::default().data("[DONE]")),
+            ];
+            return Sse::new(futures::stream::iter(events)).into_response();
+        }
+        return Json(serde_json::json!({
+            "id": id, "object": "chat.completion", "created": created, "model": body.model,
+            "choices": [{ "index": 0, "message": { "role": "assistant", "content": content,
+                "tool_calls": calls.unwrap_or_default() }, "finish_reason": finish_reason }]
+        })).into_response();
+    }
 
     if body.stream {
         let stream = match state.runtime.generate(request).await {
