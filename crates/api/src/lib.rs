@@ -3800,14 +3800,14 @@ pub struct OpenAiChatRequest {
     pub tool_choice: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiTool {
     #[serde(rename = "type")]
     pub kind: String,
     pub function: OpenAiFunction,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiFunction {
     pub name: String,
     pub description: Option<String>,
@@ -3831,10 +3831,11 @@ pub struct OpenAiToolCallFunction {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct OpenAiMessage {
     pub role: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<OpenAiToolCall>,
 }
 
@@ -3861,197 +3862,137 @@ where
     }
 }
 
-// Fallback tool protocol for GGUF chat templates without native function calling.
-// The desktop API converts validated tool requests to OpenAI-compatible output.
-fn tool_prompt(tools: &[OpenAiTool]) -> String {
-    let definitions = tools.iter().map(|tool| serde_json::json!({
-        "name": tool.function.name,
-        "description": tool.function.description,
-        "parameters": tool.function.parameters,
-    })).collect::<Vec<_>>();
-    format!(
-        "You may call these functions: {}\nTo call a function, output only one or more blocks of this exact form: [TOOL_REQUEST]{{\"name\":\"function_name\",\"arguments\":{{}}}}[END_TOOL_REQUEST]. Do not invent function names. If no function is needed, answer normally.",
-        serde_json::Value::Array(definitions)
-    )
+// Preserve the upstream llama.cpp tool-call protocol instead of guessing tools
+// from generated text. llama-server applies native or generic Jinja templates.
+fn native_tool_payload(
+    request: &OpenAiChatRequest,
+    messages: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": request.model,
+        "messages": messages,
+        "tools": request.tools,
+        "stream": request.stream,
+        "cache_prompt": false,
+    });
+    let fields = payload.as_object_mut().expect("tool request is an object");
+    if let Some(choice) = &request.tool_choice {
+        fields.insert("tool_choice".into(), choice.clone());
+    }
+    if let Some(value) = request.temperature {
+        fields.insert("temperature".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.top_p {
+        fields.insert("top_p".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.max_tokens {
+        fields.insert("max_tokens".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.seed {
+        fields.insert("seed".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.repeat_penalty {
+        fields.insert("repeat_penalty".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.repeat_last_n {
+        fields.insert("repeat_last_n".into(), serde_json::json!(value));
+    }
+    if let Some(value) = request.min_p {
+        fields.insert("min_p".into(), serde_json::json!(value));
+    }
+    if !request.stop.is_empty() {
+        fields.insert("stop".into(), serde_json::json!(request.stop));
+    }
+    payload
 }
 
-fn parse_tool_requests(text: &str, tools: &[OpenAiTool]) -> Option<Vec<serde_json::Value>> {
-    let mut remainder = text.trim();
-    // Some GGUF chat templates emit a bracketed function name instead of the
-    // fallback JSON protocol. Only accept an exact match for a declared,
-    // zero-argument function; never infer or fabricate missing arguments.
-    if let Some(name) = remainder.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        let matching = tools.iter().filter(|tool| {
-            tool.kind == "function"
-                && tool.function.name.eq_ignore_ascii_case(name)
-                && tool.function.parameters.as_ref().is_some_and(|parameters| {
-                    parameters.get("type").and_then(|value| value.as_str()) == Some("object")
-                        && parameters.get("properties").and_then(|value| value.as_object())
-                            .is_some_and(|properties| properties.is_empty())
-                        && parameters.get("required").and_then(|value| value.as_array())
-                            .is_none_or(|required| required.is_empty())
-                })
-        }).collect::<Vec<_>>();
-        if matching.len() == 1 {
-            return Some(vec![serde_json::json!({
-                "id": format!("call_{}", Uuid::new_v4().simple()),
-                "type": "function",
-                "function": { "name": matching[0].function.name, "arguments": "{}" }
-            })]);
-        }
-    }
-    // Small models sometimes omit the closing marker and arguments, or emit
-    // typographic quotes. Accept only a standalone, unambiguous zero-arg call.
-    if let Some(payload) = remainder.strip_prefix("[TOOL_REQUEST]") {
-        let payload = payload.trim().strip_suffix("[END_TOOL_REQUEST]")
-            .unwrap_or(payload.trim()).trim();
-        if !payload.contains(['{', '}', '[', ']']) {
-            let matching = tools.iter().filter(|tool| {
-                tool.kind == "function" && tool.function.name == payload
-                    && tool.function.parameters.as_ref().is_some_and(|parameters| {
-                        parameters.get("type").and_then(|value| value.as_str()) == Some("object")
-                            && parameters.get("properties").and_then(|value| value.as_object())
-                                .is_some_and(|properties| properties.is_empty())
-                            && parameters.get("required").and_then(|value| value.as_array())
-                                .is_none_or(|required| required.is_empty())
-                    })
-            }).collect::<Vec<_>>();
-            if matching.len() == 1 {
-                return Some(vec![serde_json::json!({
-                    "id": format!("call_{}", Uuid::new_v4().simple()),
-                    "type": "function",
-                    "function": { "name": payload, "arguments": "{}" }
-                })]);
-            }
-        }
-        let normalized = payload.replace(['“', '”'], "\"");
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&normalized) {
-            if let Some(name) = value.get("name").and_then(|name| name.as_str()) {
-                if value.as_object().is_some_and(|object| {
-                    object.keys().all(|key| key == "name" || key == "arguments")
-                        && object.get("arguments").is_none_or(|args| args.as_object().is_some_and(|a| a.is_empty()))
-                }) {
-                    let matching = tools.iter().filter(|tool| {
-                        tool.kind == "function" && tool.function.name == name
-                            && tool.function.parameters.as_ref().is_some_and(|parameters| {
-                                parameters.get("type").and_then(|value| value.as_str()) == Some("object")
-                                    && parameters.get("properties").and_then(|value| value.as_object())
-                                        .is_some_and(|properties| properties.is_empty())
-                                    && parameters.get("required").and_then(|value| value.as_array())
-                                        .is_none_or(|required| required.is_empty())
-                            })
-                    }).collect::<Vec<_>>();
-                    if matching.len() == 1 {
-                        return Some(vec![serde_json::json!({
-                            "id": format!("call_{}", Uuid::new_v4().simple()),
-                            "type": "function",
-                            "function": { "name": name, "arguments": "{}" }
-                        })]);
-                    }
-                }
+async fn native_tool_chat_completions(
+    state: &Arc<ApiState>,
+    body: &OpenAiChatRequest,
+) -> axum::response::Response {
+    let endpoint = match state.runtime.openai_chat_endpoint(&body.model).await {
+        Ok(endpoint) => endpoint,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    let mut messages = body.messages.iter()
+        .map(|message| serde_json::to_value(message).expect("chat message serialization"))
+        .collect::<Vec<_>>();
+    if body.use_documents.unwrap_or(true) {
+        if let Some(query) = body.messages.iter().rev()
+            .find(|message| message.role == "user")
+            .and_then(|message| message.content.as_deref())
+        {
+            let storage = state.storage.lock().await;
+            if let Ok(Some(context)) = document_context_message(&storage, query) {
+                let index = body.messages.iter().take_while(|message| message.role == "system").count();
+                messages.insert(index, serde_json::json!({
+                    "role": "system", "content": context.content
+                }));
             }
         }
     }
-    let mut calls = Vec::new();
-    while let Some(start) = remainder.strip_prefix("[TOOL_REQUEST]") {
-        let (json, rest) = start.split_once("[END_TOOL_REQUEST]")?;
-        let value: serde_json::Value = serde_json::from_str(json.trim()).ok()?;
-        let name = value.get("name")?.as_str()?;
-        if !tools.iter().any(|tool| tool.kind == "function" && tool.function.name == name) {
-            return None;
-        }
-        let args = value.get("arguments")?;
-        if !args.is_object() { return None; }
-        calls.push(serde_json::json!({
-            "id": format!("call_{}", Uuid::new_v4().simple()),
-            "type": "function",
-            "function": { "name": name, "arguments": args.to_string() }
-        }));
-        remainder = rest.trim();
+    let payload = native_tool_payload(body, messages);
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    };
+    let upstream = match client.post(&endpoint).json(&payload).send().await {
+        Ok(response) => response,
+        Err(error) => return (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+    };
+    let status = StatusCode::from_u16(upstream.status().as_u16())
+        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or(if body.stream { "text/event-stream" } else { "application/json" })
+        .to_string();
+    // Forward the upstream SSE / JSON bytes intact, including finish_reason,
+    // delta.tool_calls, tool IDs, and any backend errors.
+    let stream = upstream.bytes_stream().map(|chunk| chunk.map_err(std::io::Error::other));
+    let mut response = axum::response::Response::new(axum::body::Body::from_stream(stream));
+    *response.status_mut() = status;
+    if let Ok(header) = axum::http::HeaderValue::from_str(&content_type) {
+        response.headers_mut().insert(axum::http::header::CONTENT_TYPE, header);
     }
-    if !calls.is_empty() && remainder.is_empty() { Some(calls) } else { None }
+    response
 }
 
 #[cfg(test)]
-mod openai_tool_protocol_tests {
+mod openai_native_tool_tests {
     use super::*;
 
-    fn tools() -> Vec<OpenAiTool> {
-        vec![OpenAiTool {
-            kind: "function".to_string(),
-            function: OpenAiFunction {
-                name: "read_file".to_string(),
-                description: Some("Read a file".to_string()),
-                parameters: Some(serde_json::json!({ "type": "object" })),
-            },
-        }]
-    }
-
     #[test]
-    fn parses_valid_tool_requests_and_rejects_unlisted_functions() {
-        let valid = r#"[TOOL_REQUEST]{"name":"read_file","arguments":{"path":"README.md"}}[END_TOOL_REQUEST]"#;
-        let calls = parse_tool_requests(valid, &tools()).expect("valid tool call");
-        assert_eq!(calls[0]["function"]["name"], "read_file");
-        assert_eq!(calls[0]["function"]["arguments"], r#"{"path":"README.md"}"#);
-        assert!(parse_tool_requests(valid.replace("read_file", "delete_file").as_str(), &tools()).is_none());
-        assert!(parse_tool_requests("[TOOL_REQUEST]{bad}[END_TOOL_REQUEST]", &tools()).is_none());
-        assert!(parse_tool_requests("Hello", &tools()).is_none());
-    }
-
-    #[test]
-    fn parses_exact_bracketed_zero_argument_function_names() {
-        let zero_arg = vec![OpenAiTool {
-            kind: "function".to_string(),
-            function: OpenAiFunction {
-                name: "get_time".to_string(),
-                description: None,
-                parameters: Some(serde_json::json!({ "type": "object", "properties": {} })),
-            },
-        }];
-        let calls = parse_tool_requests("[GET_TIME]\\n", &zero_arg).expect("declared zero-arg function");
-        assert_eq!(calls[0]["function"]["name"], "get_time");
-        assert_eq!(calls[0]["function"]["arguments"], "{}");
-        assert!(parse_tool_requests("[DELETE_FILE]", &zero_arg).is_none());
-        assert!(parse_tool_requests("[GET_TIME] extra text", &zero_arg).is_none());
-        let with_arguments = vec![OpenAiTool {
-            kind: "function".to_string(),
-            function: OpenAiFunction {
-                name: "get_time".to_string(),
-                description: None,
-                parameters: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": { "timezone": { "type": "string" } }
-                })),
-            },
-        }];
-        assert!(parse_tool_requests("[GET_TIME]", &with_arguments).is_none());
-    }
-
-    #[test]
-    fn parses_incomplete_zero_argument_request_with_typographic_quotes() {
-        let zero_arg = vec![OpenAiTool {
-            kind: "function".to_string(),
-            function: OpenAiFunction {
-                name: "get_time".to_string(),
-                description: None,
-                parameters: Some(serde_json::json!({ "type": "object", "properties": {} })),
-            },
-        }];
-        assert!(parse_tool_requests("[TOOL_REQUEST]get_time\\n", &zero_arg).is_some());
-        assert!(parse_tool_requests("[TOOL_REQUEST]unknown", &zero_arg).is_none());
-        let output = "[TOOL_REQUEST]{“name”: “get_time”}\\n";
-        let calls = parse_tool_requests(output, &zero_arg).expect("unambiguous zero-arg call");
-        assert_eq!(calls[0]["function"]["name"], "get_time");
-        assert_eq!(calls[0]["function"]["arguments"], "{}");
-        assert!(parse_tool_requests("[TOOL_REQUEST]{“name”: “unknown”}", &zero_arg).is_none());
-        assert!(parse_tool_requests("[TOOL_REQUEST]{“name”: “get_time”} trailing", &zero_arg).is_none());
-    }
-
-    #[test]
-    fn tool_prompt_includes_declared_functions() {
-        let prompt = tool_prompt(&tools());
-        assert!(prompt.contains("read_file"));
-        assert!(prompt.contains("[TOOL_REQUEST]"));
+    fn preserves_tool_choice_and_tool_history() {
+        let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local:example.gguf", "stream": true,
+            "tool_choice": "required",
+            "tools": [{ "type": "function", "function": {
+                "name": "read_file", "parameters": { "type": "object",
+                    "properties": { "path": { "type": "string" } }, "required": ["path"] }
+            }}],
+            "messages": [
+                { "role": "assistant", "content": null, "tool_calls": [{
+                    "id": "call_1", "type": "function", "function": {
+                        "name": "read_file", "arguments": "{\\\"path\\\":\\\"README.md\\\"}" }
+                }]},
+                { "role": "tool", "tool_call_id": "call_1", "content": "file contents" }
+            ]
+        })).expect("valid request");
+        let messages = request.messages.iter()
+            .map(|message| serde_json::to_value(message).expect("serializable message"))
+            .collect::<Vec<_>>();
+        let payload = native_tool_payload(&request, messages);
+        assert_eq!(payload["tool_choice"], "required");
+        assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
+        assert_eq!(payload["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            r#"{ "path": "README.md" }"#.replace(' ', ""));
+        assert_eq!(payload["messages"][1]["role"], "tool");
+        assert_eq!(payload["messages"][1]["tool_call_id"], "call_1");
+        assert_eq!(payload["stream"], true);
     }
 }
 
@@ -4059,30 +4000,20 @@ async fn chat_completions(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<OpenAiChatRequest>,
 ) -> impl IntoResponse {
-    let tools = body.tools;
+    if !body.tools.is_empty() {
+        return native_tool_chat_completions(&state, &body).await;
+    }
     let mut messages = body
         .messages
         .into_iter()
         .map(|message| {
-            let mut content = message.content.unwrap_or_default();
-            if !message.tool_calls.is_empty() {
-                for call in message.tool_calls {
-                    content.push_str(&format!(
-                        "\\n[TOOL_REQUEST]{{\"name\":{},\"arguments\":{}}}[END_TOOL_REQUEST]",
-                        serde_json::json!(call.function.name), call.function.arguments
-                    ));
-                }
-            }
-            if let Some(id) = message.tool_call_id {
-                content = format!("Tool result for {id}: {content}");
-            }
+            let content = message.content.unwrap_or_default();
             ChatMessage {
                 id: Uuid::new_v4(),
                 role: match message.role.as_str() {
                     "system" => ChatRole::System,
                     "assistant" => ChatRole::Assistant,
-                    // The fallback prompt protocol uses plain-text tool results.
-                    "tool" => ChatRole::User,
+                    "tool" => ChatRole::Tool,
                     _ => ChatRole::User,
                 },
                 content,
@@ -4090,13 +4021,6 @@ async fn chat_completions(
             }
         })
         .collect::<Vec<_>>();
-    if !tools.is_empty() {
-        messages.insert(0, ChatMessage {
-            id: Uuid::new_v4(), role: ChatRole::System,
-            content: tool_prompt(&tools), created_at: Utc::now(),
-        });
-    }
-
     if body.use_documents.unwrap_or(true) {
         let storage = state.storage.lock().await;
         augment_messages_with_document_context(&storage, &mut messages);
@@ -4117,51 +4041,6 @@ async fn chat_completions(
         },
         stream: body.stream,
     };
-
-    if !tools.is_empty() {
-        // Buffer tool-enabled generations so partial JSON is never exposed as
-        // assistant prose or executed as an incomplete tool call.
-        let mut output = String::new();
-        let mut generated = match state.runtime.generate(request).await {
-            Ok(stream) => stream,
-            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        };
-        while let Some(token) = generated.next().await {
-            match token {
-                Ok(token) => output.push_str(&token.text),
-                Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-            }
-        }
-        let calls = parse_tool_requests(&output, &tools);
-        let finish_reason = if calls.is_some() { "tool_calls" } else { "stop" };
-        let content = if calls.is_some() { serde_json::Value::Null } else { serde_json::json!(output) };
-        let id = format!("chatcmpl-{}", Uuid::new_v4());
-        let created = Utc::now().timestamp();
-        if body.stream {
-            let delta = if let Some(calls) = calls {
-                serde_json::json!({ "tool_calls": calls.into_iter().enumerate().map(|(index, call)| serde_json::json!({
-                    "index": index, "id": call["id"], "type": "function", "function": call["function"]
-                })).collect::<Vec<_>>() })
-            } else { serde_json::json!({ "content": content }) };
-            let events = vec![
-                Ok::<_, Infallible>(Event::default().data(serde_json::json!({
-                    "id": id, "object": "chat.completion.chunk", "created": created, "model": body.model,
-                    "choices": [{ "index": 0, "delta": delta, "finish_reason": serde_json::Value::Null }]
-                }).to_string())),
-                Ok(Event::default().data(serde_json::json!({
-                    "id": id, "object": "chat.completion.chunk", "created": created, "model": body.model,
-                    "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
-                }).to_string())),
-                Ok(Event::default().data("[DONE]")),
-            ];
-            return Sse::new(futures::stream::iter(events)).into_response();
-        }
-        return Json(serde_json::json!({
-            "id": id, "object": "chat.completion", "created": created, "model": body.model,
-            "choices": [{ "index": 0, "message": { "role": "assistant", "content": content,
-                "tool_calls": calls.unwrap_or_default() }, "finish_reason": finish_reason }]
-        })).into_response();
-    }
 
     if body.stream {
         let stream = match state.runtime.generate(request).await {
