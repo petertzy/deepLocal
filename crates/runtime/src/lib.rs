@@ -142,6 +142,15 @@ impl RuntimeManager {
         backend.generate(request).await
     }
 
+    pub async fn openai_chat_endpoint(&self, model_id: &str) -> anyhow::Result<String> {
+        let handle = self.loaded.read().await.get(model_id).cloned()
+            .ok_or_else(|| anyhow::anyhow!("model is not loaded: {model_id}"))?;
+        let backend = self.backends.read().await.get(&handle.backend).cloned()
+            .ok_or_else(|| anyhow::anyhow!("backend not registered: {}", handle.backend))?;
+        backend.openai_chat_endpoint(model_id).await
+            .ok_or_else(|| anyhow::anyhow!("backend does not support native OpenAI tool calling"))
+    }
+
     pub async fn load_registered_model(
         &self,
         backend_id: &str,
@@ -534,6 +543,8 @@ impl InferenceBackend for LlamaCppBackend {
             .arg(port.to_string())
             .arg("--parallel")
             .arg("1")
+            // Enable llama.cpp native or generic tool-use chat templates.
+            .arg("--jinja")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // llama-server is a console executable. Without this flag, Windows
@@ -733,6 +744,12 @@ impl InferenceBackend for LlamaCppBackend {
         )
         .boxed();
         Ok(tokens)
+    }
+
+    async fn openai_chat_endpoint(&self, model_id: &str) -> Option<String> {
+        let processes = self.processes.read().await;
+        let process = processes.get(model_id)?;
+        Some(format!("http://127.0.0.1:{}/v1/chat/completions", process.port))
     }
 
     async fn unload(&self, model_id: &str) -> anyhow::Result<()> {
