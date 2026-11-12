@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
                 .resource_dir()
                 .map_err(|error| anyhow::anyhow!(error))?;
             configure_llama_server(&resource_dir);
+            configure_opus_worker(&resource_dir);
 
             let listener = tauri::async_runtime::block_on(bind_api_listener(API_HOST, API_PORT))?;
             app.manage(ApiAddress(format!("http://{API_HOST}:{API_PORT}")));
@@ -233,6 +234,14 @@ fn collect_gguf_files_inner(directory: &PathBuf, files: &mut Vec<PathBuf>) -> an
         }
     }
     Ok(())
+}
+
+fn configure_opus_worker(resources: &std::path::Path) {
+    let worker = resources.join("opus-runtime").join("opus-mt-worker");
+    if worker.is_file() {
+        // The worker embeds Python and its dependencies; model weights remain user data.
+        unsafe { std::env::set_var("DEEPLOCAL_OPUS_MT_WORKER", worker); }
+    }
 }
 
 fn bundled_llama_server_name() -> &'static str {
