@@ -14,7 +14,9 @@ pub(crate) struct TranslateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerResponse {
+    #[serde(default)]
     translation: Option<String>,
+    #[serde(default)]
     error: Option<String>,
 }
 
