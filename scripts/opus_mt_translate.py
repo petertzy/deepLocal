@@ -18,7 +18,7 @@ def translate(model_dir: pathlib.Path, text: str, beam_size: int) -> str:
     source = spm.SentencePieceProcessor(model_file=str(model_dir / "source.spm"))
     target = spm.SentencePieceProcessor(model_file=str(model_dir / "target.spm"))
     translator = ctranslate2.Translator(str(model_dir), device="cpu")
-    tokens = source.encode(text, out_type=str)
+    tokens = source.encode(text, out_type=str) + ["</s>"]
     result = translator.translate_batch(
         [tokens], beam_size=beam_size, max_decoding_length=512
     )[0]

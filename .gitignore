@@ -34,3 +34,15 @@
 *.key.pub
 
 .betty_cache.json
+
+# Local Python environments
+.venv/
+.venv-*/
+venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Local OPUS-MT model artifacts
+/models/opus-mt/
