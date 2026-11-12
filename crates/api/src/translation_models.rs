@@ -394,7 +394,7 @@ pub(crate) async fn delete_model(
     }
     // Serialized with translation requests; dropping the process releases model files.
     let mut worker = state.translation_worker.lock().await;
-    *worker = None;
+    crate::translation_api::stop_worker(&mut worker).await;
     let root = match state.models_directory.canonicalize() {
         Ok(root) => root,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Models root is unavailable").into_response(),
