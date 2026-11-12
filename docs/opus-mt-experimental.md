@@ -15,56 +15,71 @@ publish standalone Python runtimes, sign installers, or support clean end-user
 machines. All inference remains local; the browser extension can use the
 loopback API without loading a GGUF chat model.
 
-### Quick start (macOS/Linux)
+### One-command startup (macOS/Linux)
 
-After the one-time Python environment and models are prepared, start both
-the Rust backend and React UI from the repository root with **one command**:
+The source checkout requires an installed Python 3 interpreter, Rust/Cargo,
+and the existing frontend development prerequisites. The launcher manages
+only the optional OPUS-MT Python packages; it does not install Python itself.
+
+From the repository root:
 
 ```bash
 bash scripts/start-opus.sh
 ```
 
-Open `http://127.0.0.1:5173/` and select **Models** to confirm the
-translation runtime is available and both directions are installed.
-The API listens on `http://127.0.0.1:14567/v1`. Keep the terminal open
-while using the browser extension.
+On first run, the script creates an isolated virtual environment at
+`.tools/opus-runtime`, installs CTranslate2 4.9.0 and SentencePiece using
+pip, verifies both imports, and starts the Rust API and React development UI.
+This one-time setup needs internet access. Later starts reuse the environment
+without reinstalling dependencies or requiring network access for translation.
+The script also skips automatic llama.cpp installation unless explicitly
+overridden, because OPUS-MT does not require a GGUF chat model.
 
-The launcher automatically selects `.venv-opus/bin/python`, checks that
-`ctranslate2` and `sentencepiece` import successfully, exports
-`DEEPLOCAL_OPUS_MT_PYTHON`, and delegates to the existing development
-launcher. It does **not** download model weights, overwrite a virtual
-environment, or modify existing manually installed models.
+Open `http://127.0.0.1:5173/`. The API is at
+`http://127.0.0.1:14567/v1`. The script never downloads or deletes model
+weights; existing manually installed `models/opus-mt/en-zh` and
+`models/opus-mt/zh-en` directories remain usable.
 
-For a new checkout with Python 3 installed, explicitly opt in to a one-time
-virtual environment setup (this downloads Python packages):
+Other commands:
 
 ```bash
 bash scripts/start-opus.sh --setup
-```
-
-This creates `.venv-opus` only if it is missing and installs the two
-runtime packages only when imports fail. Model weights are installed
-separately in the **Models** tab, or can be reused from an existing
-`models/opus-mt/en-zh` and `models/opus-mt/zh-en` directory. The
-launcher will not silently install Python packages during normal startup.
-
-If an API server is already running, use:
-
-```bash
 bash scripts/start-opus.sh --restart
+bash scripts/start-opus.sh --stop
+bash scripts/start-opus.sh --remove-runtime
 ```
 
-Restarting applies the selected Python interpreter to the backend. To stop
-the development servers, run `bash scripts/start-opus.sh --stop`.
-The underlying `scripts/start-dev.sh` still handles the Rust/Node/llama.cpp
-development prerequisites; `DEEPLOCAL_SKIP_LLAMA_INSTALL=1` can be used
-when GGUF chat is not needed.
+`--setup` prepares the environment without starting servers.
+`--restart` applies the runtime to an already-running API.
+`--remove-runtime` stops the development servers and deletes **only**
+`.tools/opus-runtime`, and only when it contains the launcher's management
+marker. It preserves model weights, `.venv-opus`, `.venv-opus-convert`,
+other Python environments, and GGUF models. The next normal launch will
+recreate the runtime and reinstall its packages.
 
-To use a different Python environment without modifying it:
+If `DEEPLOCAL_OPUS_MT_PYTHON` is explicitly set, the launcher uses that
+interpreter without installing packages into it. To use an alternate virtual
+environment directory, set `DEEPLOCAL_OPUS_MT_VENV`. Custom directories
+are never removed by `--remove-runtime`.
+
+### Removing old, manually created virtual environments
+
+The original `.venv-opus` and `.venv-opus-convert` environments are not
+needed by the new launcher. **First verify** that
+`bash scripts/start-opus.sh --setup` succeeds and that a translation works
+using the new runtime. Then stop the servers and remove those legacy
+directories manually if they are no longer needed:
 
 ```bash
-DEEPLOCAL_OPUS_MT_PYTHON=/absolute/path/to/python bash scripts/start-opus.sh
+bash scripts/start-opus.sh --stop
+rm -rf -- .venv-opus .venv-opus-convert
 ```
+
+Run the removal command only from the repository root after confirming the
+directory names. It does not remove `models/opus-mt` or the managed runtime.
+The main branch ignores these virtual environments and does not depend on
+them. If an existing `DEEPLOCAL_OPUS_MT_PYTHON` override points into an old
+environment, unset it before using the managed runtime.
 
 ### Models and manual setup
 
