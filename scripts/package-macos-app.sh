@@ -228,6 +228,9 @@ NODE
 
 prepare_llama_runtime
 
+echo "Building bundled OPUS-MT translation worker..."
+bash "$ROOT_DIR/scripts/build-opus-macos-worker.sh"
+
 echo "Building Tauri app..."
 TAURI_BUILD_COMMAND="npm run tauri:build"
 if [[ -n "${DEEPLOCAL_TAURI_CONFIG:-}" ]]; then
@@ -272,6 +275,14 @@ if [[ -d "$DIST_DIR/deepLocal.app" ]]; then
     exit 1
   fi
   echo "Verified bundled llama.cpp runtime in the app bundle."
+  BUNDLED_OPUS_WORKER="$DIST_DIR/deepLocal.app/Contents/Resources/opus-runtime/opus-mt-worker"
+  if [[ ! -x "$BUNDLED_OPUS_WORKER" ]]; then
+    echo "Packaged app is missing the standalone OPUS-MT worker: $BUNDLED_OPUS_WORKER" >&2
+    exit 1
+  fi
+  "$BUNDLED_OPUS_WORKER" --self-test
+  echo "Verified bundled OPUS-MT runtime in the app bundle."
+
   if ! hdiutil create \
     -volname "deepLocal" \
     -srcfolder "$DIST_DIR/deepLocal.app" \
