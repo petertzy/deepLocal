@@ -61,6 +61,9 @@ pub(crate) async fn manage(
     Json(request): Json<RuntimeAction>,
 ) -> impl IntoResponse {
     if !trusted_origin(&headers) { return (StatusCode::FORBIDDEN, "Untrusted origin").into_response(); }
+    if crate::translation_runtime::bundled_worker().is_some() {
+        return (StatusCode::CONFLICT, "Bundled translation runtime cannot be modified. Manage translation models instead.").into_response();
+    }
     if !matches!(request.action.as_str(), "install" | "repair" | "remove") {
         return (StatusCode::BAD_REQUEST, "Unsupported runtime action").into_response();
     }
