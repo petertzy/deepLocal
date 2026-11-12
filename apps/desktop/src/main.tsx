@@ -31,6 +31,7 @@ import {
   FolderOpen,
   Info,
   LoaderCircle,
+  Languages,
   MessageSquare,
   Pencil,
   Plus,
@@ -55,7 +56,7 @@ SyntaxHighlighter.registerLanguage("python", python);
 SyntaxHighlighter.registerLanguage("bash", bash);
 SyntaxHighlighter.registerLanguage("json", json);
 
-type Tab = "dashboard" | "chat" | "documents" | "models" | "server" | "settings";
+type Tab = "dashboard" | "chat" | "documents" | "models" | "translation" | "server" | "settings";
 type Health = "online" | "offline";
 type UpdateStatus =
   | { kind: "idle"; message: string }
@@ -328,7 +329,7 @@ function writeStringStorage(key: string, value: string) {
 }
 
 function isTab(value: unknown): value is Tab {
-  return value === "dashboard" || value === "chat" || value === "documents" || value === "models" || value === "server" || value === "settings";
+  return value === "dashboard" || value === "chat" || value === "documents" || value === "models" || value === "translation" || value === "server" || value === "settings";
 }
 
 function readStoredTab(): Tab {
@@ -696,6 +697,7 @@ export function App() {
       { id: "chat" as const, label: "Chat", icon: MessageSquare },
       { id: "documents" as const, label: "Documents", icon: FileText },
       { id: "models" as const, label: "Models", icon: Download },
+      { id: "translation" as const, label: "Translation", icon: Languages },
       { id: "server" as const, label: "Server", icon: Server },
       { id: "settings" as const, label: "Settings", icon: Settings },
     ],
@@ -806,6 +808,11 @@ export function App() {
             onRefresh={refresh}
             onOpenSettings={() => selectTab("settings")}
           />
+        </RetainedPage>
+        <RetainedPage active={tab === "translation"}>
+          <div className="pane">
+            <TranslationModels apiBase={API_BASE} downloads={downloads} onRefresh={refresh} />
+          </div>
         </RetainedPage>
         {tab === "server" && <ServerPanel hardware={hardware} loaded={loaded} onOpenModels={() => selectTab("models")} onNotice={(message) => updateNotice("server", message)} />}
         <RetainedPage active={tab === "settings"}>
@@ -2871,7 +2878,6 @@ function Models({
         </div>
       </div>
       <div className="folderPath">{modelsDirectory}</div>
-      <TranslationModels apiBase={API_BASE} downloads={downloads} onRefresh={onRefresh} />
       <section className="discoveredPanel">
         <div className="sectionTitle">
           <h2>Local GGUF discovery</h2>
