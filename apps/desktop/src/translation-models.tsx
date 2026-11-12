@@ -18,6 +18,7 @@ type TranslationModel = {
   repository: string;
   directory: string;
   installed: boolean;
+  size_bytes?: number | null;
   verified_manifest: boolean;
 };
 
@@ -54,6 +55,10 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
     const timer = window.setInterval(() => { void refresh(); }, 4000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    void checkRuntime();
+  }, [apiBase]);
 
   async function action(endpoint: string, direction: string) {
     setBusy(direction);
@@ -141,7 +146,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
               <strong>{model.name}</strong>
               <span>{model.installed ? model.verified_manifest ? "Installed (verified on download)" : "Installed (manual files)" : "Not installed"}</span>
             </div>
-            <small>{model.repository} · CTranslate2 · CC BY 4.0</small>
+            <small>{model.repository} · CTranslate2 · CC BY 4.0{model.size_bytes ? ` · ${(model.size_bytes / 1048576).toFixed(1)} MB on disk` : ""}</small>
             <code title={model.directory}>{model.directory}</code>
             {active && (
               <div className="translationProgress">
