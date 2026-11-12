@@ -143,25 +143,21 @@ pub(crate) async fn list_models(
     }))
 }
 
-pub(crate) async fn check_runtime(headers: HeaderMap) -> impl IntoResponse {
+pub(crate) async fn check_runtime(headers: HeaderMap, State(state): State<Arc<ApiState>>) -> impl IntoResponse {
     if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
-    let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON").unwrap_or_else(|_| "python3".into());
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::process::Command::new(&python)
-            .arg("-c")
-            .arg("import ctranslate2, sentencepiece")
-            .kill_on_drop(true)
-            .output(),
-    ).await;
-    match result {
-        Ok(Ok(output)) if output.status.success() =>
-            Json(serde_json::json!({"ready": true, "message": "Python translation dependencies are available."})).into_response(),
-        _ => Json(serde_json::json!({
-            "ready": false,
-            "message": "Install Python, CTranslate2 and SentencePiece, then set DEEPLOCAL_OPUS_MT_PYTHON to the interpreter path before starting deepLocal."
-        })).into_response()
-    }
+    let (python, source) = crate::translation_runtime::selected_python(&state.models_directory);
+    let ready = crate::translation_runtime::check_dependencies(&python).await;
+    Json(serde_json::json!({
+        "ready": ready,
+        "source": source,
+        "managed_installed": crate::translation_runtime::managed_python(&state.models_directory).is_file(),
+        "managed_directory": crate::translation_runtime::managed_runtime_directory(&state.models_directory).to_string_lossy(),
+        "message": if ready {
+            "Python translation dependencies are available."
+        } else {
+            "No usable translation runtime found. A verified optional runtime distribution is not yet available; configure DEEPLOCAL_OPUS_MT_PYTHON to use an existing Python environment."
+        }
+    })).into_response()
 }
 
 pub(crate) async fn install_model(
