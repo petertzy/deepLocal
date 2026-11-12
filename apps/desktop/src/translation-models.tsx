@@ -41,6 +41,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
   const [runtimeSource, setRuntimeSource] = useState<string | null>(null);
   const [runtimeReady, setRuntimeReady] = useState<boolean | null>(null);
   const [managedInstalled, setManagedInstalled] = useState(false);
+  const [bundledRuntime, setBundledRuntime] = useState(false);
   const [confirmRemoveRuntime, setConfirmRemoveRuntime] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -137,11 +138,12 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
     try {
       const response = await fetch(`${apiBase}/runtime/translation/runtime/check`);
       if (!response.ok) throw new Error("Runtime check failed.");
-      const result = await response.json() as { ready: boolean; message: string; source?: string; managed_installed?: boolean };
+      const result = await response.json() as { ready: boolean; message: string; source?: string; managed_installed?: boolean; bundled?: boolean };
       setRuntimeNotice(result.message);
       setRuntimeSource(result.source || null);
       setRuntimeReady(result.ready);
       setManagedInstalled(Boolean(result.managed_installed));
+      setBundledRuntime(Boolean(result.bundled));
     } catch {
       setRuntimeNotice("Cannot reach the translation runtime.");
       setRuntimeReady(null);
@@ -159,16 +161,16 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
       </div>
       <p>Install only the directions you need. Converted models are stored in the deepLocal models folder, not inside the app or browser extension.</p>
       <div className="translationRuntime">
-        <span>Runtime: {runtimeSource === "managed" ? "app-managed" : runtimeSource === "environment" ? "custom Python" : "system Python"} / CTranslate2 / SentencePiece</span>
+        <span>Runtime: {runtimeSource === "bundled" ? "bundled (no system Python required)" : runtimeSource === "managed" ? "app-managed" : runtimeSource === "environment" ? "custom Python" : "system Python"} / CTranslate2 / SentencePiece</span>
         <button type="button" className="secondaryAction" onClick={() => void checkRuntime()} disabled={busy !== null}>
           <RefreshCw size={15} /> Check runtime
         </button>
       </div>
       <div className="translationActions">
-        {!managedInstalled && <button type="button" onClick={() => void manageRuntime("install")} disabled={busy !== null}>
+        {!bundledRuntime && !managedInstalled && <button type="button" onClick={() => void manageRuntime("install")} disabled={busy !== null}>
           <Download size={15} /> Install runtime
         </button>}
-        {managedInstalled && <>
+        {!bundledRuntime && managedInstalled && <>
           <button type="button" className="secondaryAction" onClick={() => void manageRuntime("repair")} disabled={busy !== null}>
             <RefreshCw size={15} /> Repair runtime
           </button>
@@ -182,7 +184,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
         </>}
       </div>
       {runtimeNotice && <p role="status">{runtimeNotice}</p>}
-      <p>Runtime management requires a local source checkout and Python 3. Package installation needs internet access. Custom Python environments and model files are never removed.</p>
+      <p>{bundledRuntime ? "The standalone translation runtime is included with the app. Download only the language models you need; bundled dependencies cannot be removed here." : "Source-checkout runtime management requires Python 3 and internet access for package installation. Custom Python environments and model files are never removed."}</p>
       {!catalog && <p>Reading available translation models...</p>}
       {catalog?.models.map((model) => {
         const jobs = downloads.filter(job => job.repo === model.repository &&
