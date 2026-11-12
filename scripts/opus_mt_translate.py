@@ -48,13 +48,21 @@ def validated_text(request: object) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--model-dir", type=pathlib.Path)
     group.add_argument("--models-root", type=pathlib.Path)
     parser.add_argument("--beam-size", type=int, default=4)
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.beam_size <= 16:
         parser.error("beam-size must be between 1 and 16")
+    if args.self_test:
+        import ctranslate2
+        import sentencepiece
+        print("OPUS-MT runtime ready", flush=True)
+        return 0
+    if args.model_dir is None and args.models_root is None:
+        parser.error("one of --model-dir or --models-root is required")
     worker = TranslationWorker(args.beam_size)
     if args.model_dir is not None:
         try:
