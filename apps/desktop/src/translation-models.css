@@ -1,0 +1,64 @@
+.translationModels {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  margin: 16px 0 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.translationModels > p {
+  margin: 0;
+  color: #536477;
+  line-height: 1.5;
+}
+.translationRuntime, .translationModelHeading, .translationActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.translationRuntime, .translationModelHeading {
+  justify-content: space-between;
+}
+.translationModels button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.translationModel {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: white;
+  min-width: 0;
+}
+.translationModelHeading span, .translationModel small {
+  color: #64748b;
+  font-size: 12px;
+}
+.translationModel code {
+  color: #475569;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.translationProgress {
+  display: grid;
+  gap: 5px;
+}
+.translationProgress progress {
+  width: 100%;
+  height: 12px;
+}
+.translationProgress span {
+  color: #475569;
+  font-size: 12px;
+}
+.translationModels .translationError {
+  color: #b91c1c;
+}
+.translationFootnote {
+  font-size: 12px;
+}
