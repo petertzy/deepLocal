@@ -16,19 +16,19 @@ For architecture, packaging, release, and API details, see the
 
 This PR branch is reserved for personal, local/offline translation experiments
 and is not intended to be merged into main or distributed as a packaged app.
-For an existing checkout with a working `.venv-opus` environment and
-`models/opus-mt` model directories, start the API and desktop-style web UI
-with one command:
+With Python 3 installed, start the API and desktop-style web UI with one
+command. The first launch automatically installs isolated translation runtime
+dependencies under `.tools/opus-runtime` (network required once):
 
 ```bash
 bash scripts/start-opus.sh
 ```
 
-Open `http://127.0.0.1:5173/`. To set up a missing Python virtual
-environment, run `bash scripts/start-opus.sh --setup` once (requires
-internet access for Python dependencies). Use
-`bash scripts/start-opus.sh --restart` if an API server is already running.
-The launcher does not download or replace installed translation models.
+Open `http://127.0.0.1:5173/`. Later launches reuse the runtime without
+reinstalling packages. Use `bash scripts/start-opus.sh --setup` to prepare
+without starting, `--restart` for an existing API, and `--remove-runtime`
+to remove only the managed Python environment. Existing translation models
+and legacy virtual environments are preserved.
 See [OPUS-MT source-checkout guide](docs/opus-mt-experimental.md) for
 configuration, browser extension integration, and troubleshooting.
 
