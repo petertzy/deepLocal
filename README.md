@@ -12,6 +12,26 @@ For architecture, packaging, release, and API details, see the
 
 <img width="1432" height="745" alt="Image" src="https://github.com/user-attachments/assets/ebaddb08-39c0-4990-81f0-97d47dafa93b" />
 
+## Experimental OPUS-MT source-checkout workflow
+
+This PR branch is reserved for personal, local/offline translation experiments
+and is not intended to be merged into main or distributed as a packaged app.
+For an existing checkout with a working `.venv-opus` environment and
+`models/opus-mt` model directories, start the API and desktop-style web UI
+with one command:
+
+```bash
+bash scripts/start-opus.sh
+```
+
+Open `http://127.0.0.1:5173/`. To set up a missing Python virtual
+environment, run `bash scripts/start-opus.sh --setup` once (requires
+internet access for Python dependencies). Use
+`bash scripts/start-opus.sh --restart` if an API server is already running.
+The launcher does not download or replace installed translation models.
+See [OPUS-MT source-checkout guide](docs/opus-mt-experimental.md) for
+configuration, browser extension integration, and troubleshooting.
+
 ## Install the packaged app
 
 Desktop installers are currently published in separate releases by platform:
