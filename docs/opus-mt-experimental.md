@@ -42,6 +42,41 @@ environment, point to its interpreter:
 export DEEPLOCAL_OPUS_MT_PYTHON=/absolute/path/to/venv/bin/python
 ```
 
+## Isolated installer integration test
+
+The default Rust and Python unit tests do not download large model weights.
+To test the real installer without touching your existing `./models` directory,
+build the CLI and run the opt-in smoke test:
+
+```bash
+cargo build -p deeplocal
+python3 scripts/test-opus-mt-install.py --direction en-zh
+```
+
+The test creates a temporary models directory, temporary SQLite database and
+separate loopback API server. It exercises download progress, a successful
+staged installation, receipt verification, detection of a deliberately
+corrupted README, restoration of the original file, and deletion. The entire
+temporary directory is cleaned up when the test exits. Your existing
+manually converted models are not modified.
+
+To additionally test cancellation (which initiates a second download), run:
+
+```bash
+python3 scripts/test-opus-mt-install.py --direction en-zh --cancel-test
+```
+
+This is an opt-in network test: allow approximately 300 MB per complete model
+download and sufficient free disk space for staging. The default timeout is
+30 minutes; override with `--timeout 3600` on slower connections.
+Do not run the test against the normal development server or click Delete on
+your manually installed models. It is safe to keep `./scripts/start-dev.sh`
+running because the test uses its own port and working directory.
+
+The CLI honors the `models.directory` setting from `--config` when
+constructing the API router; this is required for the test's isolation and
+for future user-configurable model storage.
+
 ## Model manager (experimental)
 
 Open the **Models** tab and use **OPUS-MT translation models** to install
