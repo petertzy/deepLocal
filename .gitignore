@@ -46,3 +46,6 @@ __pycache__/
 
 # Local OPUS-MT model artifacts
 /models/opus-mt/
+
+# Generated standalone OPUS-MT macOS packaging artifacts
+/apps/desktop/src-tauri/resources/opus-runtime/
