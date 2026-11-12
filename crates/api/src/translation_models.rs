@@ -147,15 +147,19 @@ pub(crate) async fn check_runtime(headers: HeaderMap, State(state): State<Arc<Ap
     if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
     let (python, source) = crate::translation_runtime::selected_python(&state.models_directory);
     let ready = crate::translation_runtime::check_dependencies(&python).await;
+    let local_runtime = std::env::current_dir().ok().map(|root| root.join(".tools/opus-runtime"));
+    let managed_installed = local_runtime.as_ref().is_some_and(|dir|
+        dir.join(".deeplocal-opus-managed").is_file() && dir.join("bin/python").is_file()
+    );
     Json(serde_json::json!({
         "ready": ready,
         "source": source,
-        "managed_installed": crate::translation_runtime::managed_python(&state.models_directory).is_file(),
-        "managed_directory": crate::translation_runtime::managed_runtime_directory(&state.models_directory).to_string_lossy(),
+        "managed_installed": managed_installed,
+        "managed_directory": local_runtime.map(|dir| dir.to_string_lossy().into_owned()),
         "message": if ready {
             "Python translation dependencies are available."
         } else {
-            "No usable translation runtime found. A verified optional runtime distribution is not yet available; configure DEEPLOCAL_OPUS_MT_PYTHON to use an existing Python environment."
+            "No usable translation runtime found. Use Install runtime to create a source-checkout Python environment, or configure DEEPLOCAL_OPUS_MT_PYTHON."
         }
     })).into_response()
 }
