@@ -47,6 +47,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import "./styles.css";
+import { TranslationModels } from "./translation-models";
 
 SyntaxHighlighter.registerLanguage("javascript", javascript);
 SyntaxHighlighter.registerLanguage("typescript", typescript);
@@ -2870,6 +2871,7 @@ function Models({
         </div>
       </div>
       <div className="folderPath">{modelsDirectory}</div>
+      <TranslationModels apiBase={API_BASE} downloads={downloads} onRefresh={onRefresh} />
       <section className="discoveredPanel">
         <div className="sectionTitle">
           <h2>Local GGUF discovery</h2>
