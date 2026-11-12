@@ -41,6 +41,77 @@ environment, point to its interpreter:
 export DEEPLOCAL_OPUS_MT_PYTHON=/absolute/path/to/venv/bin/python
 ```
 
+## Model manager (experimental)
+
+Open the **Models** tab and use **OPUS-MT translation models** to install
+English-to-Chinese and/or Chinese-to-English models separately. These are
+preconverted CTranslate2 checkpoints from
+`Sams200/opus-mt-en-zh` and `Sams200/opus-mt-zh-en` on Hugging Face,
+derived from Helsinki-NLP's OPUS-MT checkpoints (CC BY 4.0). Review each
+model's license and attribution before redistribution.
+
+The installer resolves the repository revision, fetches the model files into
+an isolated temporary directory, checks their sizes, verifies available
+Hugging Face LFS SHA-256 values (required for `model.bin`), and records
+SHA-256 hashes of **all** installed files. It moves the directory into
+`<models-root>/opus-mt/<direction>` only after every file passes the checks.
+An interrupted or failed download does not become an installed model.
+Install progress and cancellation use the existing download jobs list.
+
+**Verify files** recomputes and compares hashes to the local installation
+receipt. A manually converted legacy model can still run, but does not have
+a receipt and is labelled as manually installed. **Delete** removes only the
+selected translation direction after closing the translation worker.
+The GGUF model catalogue and load/unload operations remain separate.
+
+The desktop app uses the configured app-data models root, not its application
+bundle. Translation model weights are never bundled in release artifacts.
+The small Python worker is embedded as text in the Rust API binary so a
+packaged app does not require a source checkout.
+
+## Runtime deployment strategy
+
+Model download and runtime installation are intentionally separate:
+
+1. **Current development mode:** run Python with CTranslate2 and SentencePiece
+   installed and set `DEEPLOCAL_OPUS_MT_PYTHON` to the interpreter. Use
+   **Check runtime** in Models to test these imports. Neither PyTorch nor
+   Transformers is required to run preconverted checkpoints.
+2. **Production deployment (not implemented):** publish a versioned, signed
+   per-platform translation worker/runtime archive as an optional download
+   into the application data directory. Verify its pinned SHA-256 before
+   activation, keep it outside the app bundle, show progress, and allow
+   removal. Do not execute arbitrary installation commands or silently run
+   `pip install` on an end user's machine.
+3. A production worker should ideally use the CTranslate2 native runtime
+   directly (or a tightly controlled standalone Python runtime). Keep model
+   binaries and the runtime separately updatable. Validate macOS universal/
+   arm64, Windows, and Linux builds independently before enabling a one-click
+   runtime installation button.
+
+Until the optional runtime distribution exists, the Models page downloads
+and verifies model data but does **not** promise a ready-to-use translation
+environment on clean end-user installations. There is no cloud translation
+fallback.
+
+### Model manager API
+
+- `GET /runtime/translation/models` lists directions, installation state,
+  receipt availability, local paths, and runtime configuration.
+- `POST /runtime/translation/models/install` with
+  `{"direction":"en-zh"}` queues a background download and returns a
+  `job_id`. `GET /runtime/downloads` reports progress; the existing
+  `POST /runtime/downloads/cancel` cancels it.
+- `POST /runtime/translation/models/verify` checks all installed files
+  against the receipt.
+- `POST /runtime/translation/models/delete` deletes one selected direction.
+- `GET /runtime/translation/runtime/check` tests Python dependencies.
+
+The model installer needs network access only while downloading; inference
+is fully local after the files and runtime are installed. The public model
+repository is resolved at installation time and individual file downloads
+are pinned to that resolved revision.
+
 ## Request
 
 ```bash
