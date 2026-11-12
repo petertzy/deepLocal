@@ -1,6 +1,6 @@
 //! Optional OPUS-MT model installation outside the application bundle.
 use crate::ApiState;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::State, http::{HeaderMap, StatusCode, header::ORIGIN}, response::IntoResponse, Json};
 use chrono::Utc;
 use deeplocal_core::DownloadJob;
 use futures::StreamExt;
@@ -14,6 +14,17 @@ const REQUIRED_FILES: &[&str] = &[
     "model.bin", "source.spm", "target.spm", "config.json", "shared_vocabulary.json",
 ];
 const RECEIPT: &str = ".deeplocal-opus-mt.json";
+
+// Browser pages must not be able to trigger model downloads or deletions.
+fn trusted_ui_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN) else { return true; };
+    matches!(origin.to_str().ok(), Some(
+        "tauri://localhost"
+        | "http://tauri.localhost"
+        | "http://127.0.0.1:5173"
+        | "http://localhost:5173"
+    ))
+}
 
 fn model_source(direction: &str) -> Option<(&'static str, &'static str)> {
     match direction {
@@ -126,7 +137,8 @@ pub(crate) async fn list_models(
     }))
 }
 
-pub(crate) async fn check_runtime() -> impl IntoResponse {
+pub(crate) async fn check_runtime(headers: HeaderMap) -> impl IntoResponse {
+    if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
     let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON").unwrap_or_else(|_| "python3".into());
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -147,9 +159,11 @@ pub(crate) async fn check_runtime() -> impl IntoResponse {
 }
 
 pub(crate) async fn install_model(
+    headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ModelDirection>,
 ) -> impl IntoResponse {
+    if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
     let Some((_, repo)) = model_source(&request.direction) else {
         return (StatusCode::BAD_REQUEST, "Unsupported OPUS-MT direction").into_response();
     };
@@ -244,7 +258,7 @@ async fn download_into_stage(
     target: &Path,
     staging: &Path,
 ) -> anyhow::Result<()> {
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120)).build()?;
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
     let revision: HubRevision = client.get(format!("https://huggingface.co/api/models/{repo}"))
         .send().await?.error_for_status()?.json().await?;
     if revision.sha.len() != 40 || !revision.sha.bytes().all(|c| c.is_ascii_hexdigit()) {
@@ -325,15 +339,18 @@ async fn download_into_stage(
             files: manifest_files,
         })?,
     ).await?;
+    if super::download_cancel_requested(&state.downloads, job_id).await { anyhow::bail!("cancelled"); }
     if target.exists() { anyhow::bail!("Model directory appeared during installation"); }
     tokio::fs::rename(staging, target).await?;
     Ok(())
 }
 
 pub(crate) async fn verify_model(
+    headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ModelDirection>,
 ) -> impl IntoResponse {
+    if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
     let Some(dir) = model_path(&state.models_directory, &request.direction) else {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"verified": false, "message": "Unsupported direction"}))).into_response();
     };
@@ -350,9 +367,11 @@ pub(crate) async fn verify_model(
 }
 
 pub(crate) async fn delete_model(
+    headers: HeaderMap,
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ModelDirection>,
 ) -> impl IntoResponse {
+    if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
     let Some(dir) = model_path(&state.models_directory, &request.direction) else {
         return (StatusCode::BAD_REQUEST, "Unsupported OPUS-MT direction").into_response();
     };
@@ -385,6 +404,15 @@ pub(crate) async fn delete_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsafe_browser_origins_cannot_manage_model_files() {
+        let mut headers = HeaderMap::new();
+        assert!(trusted_ui_origin(&headers));
+        headers.insert(ORIGIN, "https://example.com".parse().unwrap());
+        assert!(!trusted_ui_origin(&headers));
+        headers.insert(ORIGIN, "tauri://localhost".parse().unwrap());
+        assert!(trusted_ui_origin(&headers));
+    }
     #[test]
     fn only_known_directions_resolve_to_model_paths() {
         let root = Path::new("/models");
