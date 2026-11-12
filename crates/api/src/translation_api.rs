@@ -44,8 +44,7 @@ async fn request_translation(
 ) -> Result<String, String> {
     if worker.is_none() {
         // Embed the small worker script; packaged desktop apps do not need a source checkout.
-        let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON")
-            .unwrap_or_else(|_| "python3".to_owned());
+        let (python, _) = crate::translation_runtime::selected_python(models_root);
         let mut child = Command::new(python)
             .arg("-u")
             .arg("-c")
