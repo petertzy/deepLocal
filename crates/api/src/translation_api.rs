@@ -29,6 +29,13 @@ pub(crate) struct TranslationWorkerProcess {
 
 pub(crate) type TranslationWorkerState = Mutex<Option<TranslationWorkerProcess>>;
 
+/// Stop a cached worker and wait for it to release model files before deletion.
+pub(crate) async fn stop_worker(worker: &mut Option<TranslationWorkerProcess>) {
+    if let Some(mut process) = worker.take() {
+        let _ = process._child.kill().await;
+    }
+}
+
 async fn request_translation(
     worker: &mut Option<TranslationWorkerProcess>,
     models_root: &std::path::Path,
