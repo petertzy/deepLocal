@@ -151,8 +151,21 @@ mod tests {
     }
 
     #[test]
-    fn worker_response_requires_translation_field() {
-        assert!(serde_json::from_str::<WorkerResponse>(r#"{"translation":"你好"}"#).is_ok());
-        assert!(serde_json::from_str::<WorkerResponse>(r#"{"text":"你好"}"#).is_err());
+    fn worker_response_accepts_success_and_error_messages() {
+        let success: WorkerResponse =
+            serde_json::from_str(r#"{"translation":"你好"}"#).unwrap();
+        assert_eq!(success.translation.as_deref(), Some("你好"));
+        assert!(success.error.is_none());
+
+        let failure: WorkerResponse =
+            serde_json::from_str(r#"{"error":"model missing"}"#).unwrap();
+        assert!(failure.translation.is_none());
+        assert_eq!(failure.error.as_deref(), Some("model missing"));
+
+        let malformed: WorkerResponse =
+            serde_json::from_str(r#"{"text":"你好"}"#).unwrap();
+        assert!(malformed.translation.is_none());
+        assert!(malformed.error.is_none());
     }
+
 }
