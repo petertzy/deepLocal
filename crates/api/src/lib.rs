@@ -4046,7 +4046,7 @@ mod openai_native_tool_tests {
     #[test]
     fn native_tool_arguments_survive_json_round_trip_without_double_escaping() {
         let arguments = serde_json::json!({
-            "path": "folder/quoted \\"name\\".txt",
+            "path": r#"folder/quoted "name".txt"#,
             "metadata": { "enabled": true, "count": 2 }
         }).to_string();
         let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
@@ -4070,7 +4070,7 @@ mod openai_native_tool_tests {
         assert_eq!(forwarded, arguments);
         let parsed: serde_json::Value = serde_json::from_str(forwarded)
             .expect("forwarded tool arguments are valid JSON");
-        assert_eq!(parsed["path"], "folder/quoted \\"name\\".txt");
+        assert_eq!(parsed["path"], r#"folder/quoted "name".txt"#);
         assert_eq!(parsed["metadata"]["enabled"], true);
         assert_eq!(parsed["metadata"]["count"], 2);
 
