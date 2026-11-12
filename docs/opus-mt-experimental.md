@@ -107,7 +107,32 @@ packaged app does not require a source checkout.
 
 ## Runtime deployment strategy
 
-Model download and runtime installation are intentionally separate:
+Model download and runtime installation are intentionally separate.
+
+### Managed runtime discovery foundation
+
+The API now selects the Python interpreter in this order:
+
+1. `DEEPLOCAL_OPUS_MT_PYTHON`, when explicitly set.
+2. `<models-root>/.translation-runtime/bin/python` on macOS/Linux, or
+   `<models-root>/.translation-runtime/Scripts/python.exe` on Windows,
+   when that interpreter exists.
+3. The system `python3` fallback.
+
+`GET /runtime/translation/runtime/check` reports `ready`, `source`,
+`managed_installed`, and `managed_directory` and tests CTranslate2 and
+SentencePiece imports. The desktop Models panel displays the detected
+runtime source. No existing virtual environment or model installation is
+modified by this discovery feature.
+
+**Important:** managed runtime discovery is not an installer. There is no
+trusted, signed, per-platform runtime archive published for this prototype
+yet. Do not enable a one-click install control until an archive publishing
+pipeline, pinned release metadata, SHA-256 validation, safe extraction,
+rollback, and platform integration tests exist. Python's `venv` module
+still depends on an existing base interpreter and is not a substitute for
+a standalone runtime distribution.
+
 
 1. **Current development mode:** run Python with CTranslate2 and SentencePiece
    installed and set `DEEPLOCAL_OPUS_MT_PYTHON` to the interpreter. Use
