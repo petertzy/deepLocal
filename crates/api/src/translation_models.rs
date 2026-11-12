@@ -242,6 +242,11 @@ async fn download_direction(
 ) -> anyhow::Result<()> {
     let parent = target.parent().ok_or_else(|| anyhow::anyhow!("Invalid model directory"))?;
     tokio::fs::create_dir_all(parent).await?;
+    let root = state.models_directory.canonicalize()?;
+    let canonical_parent = parent.canonicalize()?;
+    if canonical_parent != root.join("opus-mt") {
+        anyhow::bail!("Translation model folder escapes the configured models root");
+    }
     let staging = parent.join(format!(".install-{direction}-{job_id}"));
     tokio::fs::create_dir(&staging).await?;
     let result = download_into_stage(state, job_id, repo, target, &staging).await;
