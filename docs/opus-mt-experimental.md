@@ -58,8 +58,7 @@ Script-specific Chinese variants are not distinguished by this prototype.
 
 The endpoint returns 404 when the requested direction is not installed,
 400 for invalid input, and 502/503 for worker or dependency errors. It does
-**not** fall back to another provider. Each request starts a fresh worker and
-reloads the model, so this prototype is **not optimized for latency**.
+**not** fall back to another provider. The API starts one persistent Python worker on the first translation request.\nThe worker lazily loads and caches each translation direction on first use,\nthen reuses the model for subsequent requests. Requests are serialized through\na shared mutex; a failed or timed-out request resets the worker so the next\nrequest starts a fresh process. The first request in each direction still pays\nmodel-loading cost.
 The model runs on CPU. It has not been benchmarked or validated for
 translation quality across language pairs.
 
@@ -75,3 +74,27 @@ convert a real model, start deepLocal, and call the endpoint with representative
 English and Chinese sentences.
 
 The existing browser extension has **not** been modified to call this endpoint.
+
+## Persistent worker protocol
+
+The API launches `scripts/opus_mt_translate.py --models-root ./models` and
+exchanges newline-delimited JSON over standard input/output. Example input:
+
+```json
+{"direction":"en-zh","text":"Hello, how are you today?"}
+```
+
+Each line returns either `{"translation":"..."}` or `{"error":"..."}`.
+Only `en-zh` and `zh-en` directions are accepted. Models remain on disk and
+are loaded only when that direction is first requested. The original
+`--model-dir` one-shot CLI is still supported for manual checks.
+
+To validate the persistent protocol manually:
+
+```bash
+printf '%s\\n' \\
+  '{"direction":"en-zh","text":"Hello, how are you today?"}' \\
+  '{"direction":"zh-en","text":"今天天气很好。"}' \\
+  '{"direction":"en-zh","text":"The weather is beautiful today."}' | \\
+  python3 scripts/opus_mt_translate.py --models-root ./models
+```
