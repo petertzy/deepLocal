@@ -2,6 +2,7 @@ mod translation_routing;
 mod translation_api;
 mod translation_models;
 mod translation_runtime;
+mod translation_runtime_manage;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -168,6 +169,7 @@ fn router_with_storage(
         .route("/runtime/translation/models/verify", post(translation_models::verify_model))
         .route("/runtime/translation/models/delete", post(translation_models::delete_model))
         .route("/runtime/translation/runtime/check", get(translation_models::check_runtime))
+        .route("/runtime/translation/runtime/manage", post(translation_runtime_manage::manage))
         .with_state(Arc::new(ApiState {
             runtime,
             downloads: Arc::new(RwLock::new(restored_downloads)),
