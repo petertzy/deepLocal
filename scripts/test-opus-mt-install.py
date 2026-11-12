@@ -4,8 +4,8 @@
 Runs a separate deepLocal server with an isolated temporary models directory,
 database, and port. Never touches the user's existing model files.
 
-This test downloads real model weights and requires network access. It is not
-part of the default unit test or CI suite.
+By default this test uses a tiny loopback HTTP fixture without network access.
+Use --real-download to opt in to a full model download.
 """
 
 import argparse
@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -77,10 +78,12 @@ def await_job(base, job_id, timeout):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--direction", choices=("en-zh", "zh-en"), default="en-zh")
+    parser.add_argument("--real-download", action="store_true",
+                        help="Download real weights from Hugging Face (requires network).")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument(
         "--cancel-test", action="store_true",
-        help="Also exercise cancellation using the opposite direction (may download more data).",
+        help="Also exercise cancellation (included automatically for the local fixture).",
     )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -89,6 +92,26 @@ def main():
         print("Build the CLI first: cargo build -p deeplocal", file=sys.stderr)
         return 2
 
+    if not args.real_download:
+        sys.path.insert(0, str(root / "tests"))
+        from opus_mt_mock_hub import FixtureServer
+
+        fixture = FixtureServer(("127.0.0.1", 0))
+        thread = threading.Thread(target=fixture.serve_forever, daemon=True)
+        thread.start()
+        print("Using tiny local HTTP fixture; no external downloads.")
+    else:
+        fixture = None
+
+    try:
+        return run_isolated(args, root, binary, fixture)
+    finally:
+        if fixture is not None:
+            fixture.shutdown()
+            fixture.server_close()
+
+
+def run_isolated(args, root, binary, fixture):
     with tempfile.TemporaryDirectory(prefix="deeplocal-opus-integration-") as tmp:
         workspace = Path(tmp)
         models = workspace / "models"
@@ -110,7 +133,11 @@ def main():
                 cwd=workspace,
                 stdout=output,
                 stderr=subprocess.STDOUT,
-                env=os.environ.copy(),
+                env={
+                    **os.environ,
+                    **({"DEEPLOCAL_OPUS_MT_TEST_HUB_URL":
+                        f"http://127.0.0.1:{fixture.server_port}/"} if fixture else {}),
+                },
             )
             try:
                 for _ in range(100):
@@ -172,18 +199,48 @@ def main():
                 assert not expected_path.exists()
                 print("PASS: deletion of isolated model")
 
-                if args.cancel_test:
+                if fixture is not None:
+                    # Verify a bad remote SHA-256 cannot install any files.
+                    fixture.corrupt = True
+                    _, response = api(base, "POST", "/runtime/translation/models/install",
+                                      {"direction": args.direction})
+                    failed, _ = await_job(base, response["job_id"], args.timeout)
+                    assert failed["status"] == "error", failed
+                    assert "SHA-256" in (failed.get("error") or ""), failed
+                    assert not expected_path.exists()
+                    assert not list((models / "opus-mt").glob(".install-*"))
+                    fixture.corrupt = False
+                    print("PASS: remote checksum mismatch rejected and staging cleaned")
+
+                    # Missing checksum metadata for the main weight file is rejected.
+                    fixture.missing_checksum = True
+                    _, response = api(base, "POST", "/runtime/translation/models/install",
+                                      {"direction": args.direction})
+                    failed, _ = await_job(base, response["job_id"], args.timeout)
+                    assert failed["status"] == "error", failed
+                    assert not expected_path.exists()
+                    fixture.missing_checksum = False
+                    print("PASS: missing weight checksum rejected")
+
+                if args.cancel_test or fixture is not None:
                     other = "zh-en" if args.direction == "en-zh" else "en-zh"
                     print(f"Testing cancellation of {other}...")
+                    if fixture is not None:
+                        fixture.slow = True
+                        fixture.first_chunk.clear()
                     _, response = api(base, "POST", "/runtime/translation/models/install",
                                       {"direction": other})
                     job_id = response["job_id"]
+                    if fixture is not None:
+                        assert fixture.first_chunk.wait(timeout=10), "Fixture download did not start"
                     api(base, "POST", "/runtime/downloads/cancel", {"job_id": job_id})
                     job, _ = await_job(base, job_id, args.timeout)
                     assert job["status"] == "cancelled", job
                     assert not (models / "opus-mt" / other).exists()
                     assert not list((models / "opus-mt").glob(".install-*"))
                     print("PASS: cancellation removed temporary files")
+                    if fixture is not None:
+                        fixture.slow = False
 
                 print("PASS: all requested isolated integration checks")
                 return 0
