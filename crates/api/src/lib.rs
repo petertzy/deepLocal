@@ -4044,6 +4044,46 @@ mod openai_native_tool_tests {
     }
 
     #[test]
+    fn native_tool_arguments_survive_json_round_trip_without_double_escaping() {
+        let arguments = serde_json::json!({
+            "path": "folder/quoted \\"name\\".txt",
+            "metadata": { "enabled": true, "count": 2 }
+        }).to_string();
+        let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+            "model": "local:example.gguf",
+            "messages": [{
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": { "name": "read_file", "arguments": arguments }
+                }]
+            }]
+        })).expect("valid request");
+        let messages = request.messages.iter()
+            .map(|message| serde_json::to_value(message).expect("serializable message"))
+            .collect::<Vec<_>>();
+        let payload = native_tool_payload(&request, messages);
+        let forwarded = payload["messages"][0]["tool_calls"][0]["function"]["arguments"]
+            .as_str().expect("tool arguments remain a string");
+        assert_eq!(forwarded, arguments);
+        let parsed: serde_json::Value = serde_json::from_str(forwarded)
+            .expect("forwarded tool arguments are valid JSON");
+        assert_eq!(parsed["path"], "folder/quoted \\"name\\".txt");
+        assert_eq!(parsed["metadata"]["enabled"], true);
+        assert_eq!(parsed["metadata"]["count"], 2);
+
+        let encoded = serde_json::to_string(&payload).expect("serializable payload");
+        let decoded: serde_json::Value =
+            serde_json::from_str(&encoded).expect("valid payload JSON");
+        assert_eq!(
+            decoded["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            arguments
+        );
+    }
+
+    #[test]
     fn preserves_tool_choice_and_tool_history() {
         let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
             "model": "local:example.gguf", "stream": true,
@@ -4055,7 +4095,7 @@ mod openai_native_tool_tests {
             "messages": [
                 { "role": "assistant", "content": null, "tool_calls": [{
                     "id": "call_1", "type": "function", "function": {
-                        "name": "read_file", "arguments": "{\\\"path\\\":\\\"README.md\\\"}" }
+                        "name": "read_file", "arguments": r#"{"path":"README.md"}"# }
                 }]},
                 { "role": "tool", "tool_call_id": "call_1", "content": "file contents" }
             ]
