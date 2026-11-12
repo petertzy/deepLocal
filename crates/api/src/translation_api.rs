@@ -113,7 +113,7 @@ pub(crate) async fn translate(
     let mut guard = state.translation_worker.lock().await;
     let result = timeout(
         Duration::from_secs(120),
-        request_translation(&mut guard, &canonical_root, pair.model_key(), &request.text),
+        request_translation(&mut guard, &canonical_root, &pair.model_key(), &request.text),
     ).await;
     let translation = match result {
         Ok(Ok(translation)) => translation,
