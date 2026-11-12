@@ -76,6 +76,27 @@ The original **Models** page retains GGUF search, local discovery, model
 loading, and its other existing workflows. This separation does not change
 the OPUS-MT API endpoint or the browser extension integration.
 
+### Test the Translation page's Install runtime button
+
+Use the regular development launcher to test a clean installation from the
+UI. Unlike `bash scripts/start-opus.sh`, the command below does not
+automatically create the OPUS-MT Python environment before opening the UI.
+Run all commands from the repository root:
+
+```bash
+bash scripts/start-opus.sh --stop
+bash scripts/start-opus.sh --remove-runtime
+DEEPLOCAL_SKIP_LLAMA_INSTALL=1 bash scripts/start-dev.sh
+```
+
+The removal command only works for a marked, script-managed runtime. If it
+reports that no managed runtime exists, continue with the startup command.
+Open `http://127.0.0.1:5173/`, select **Translation** in the left sidebar,
+and click **Install runtime**. After installation, click **Check runtime**.
+Python 3 and internet access are needed for the first dependency installation.
+The model directories `models/opus-mt/en-zh` and
+`models/opus-mt/zh-en` are preserved.
+
 ### Runtime controls in the Translation page
 
 The **Translation** page in the left sidebar provides **Install runtime**, **Repair runtime**, and
@@ -96,7 +117,7 @@ The operations run on the local Rust backend and may take several minutes.
 The page displays a completion or error message. For a complete clean-start
 test, run `bash scripts/start-opus.sh --stop`, then
 `bash scripts/start-opus.sh --remove-runtime`, and start the regular
-development server with `bash scripts/start-dev.sh`. From the Translation page,
+development server with `DEEPLOCAL_SKIP_LLAMA_INSTALL=1 bash scripts/start-dev.sh`. From the Translation page,
 click **Install runtime**. The normal
 `bash scripts/start-opus.sh` command still installs the runtime automatically
 before starting, so it will usually show **Repair runtime** and
