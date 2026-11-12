@@ -3,7 +3,7 @@ use crate::{ApiState, translation_routing::{TranslationPair, TranslationRoute, s
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
-use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
+use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, process::{Child, ChildStdin, ChildStdout, Command}, sync::Mutex, time::timeout};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TranslateRequest {
@@ -14,7 +14,64 @@ pub(crate) struct TranslateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerResponse {
-    translation: String,
+    translation: Option<String>,
+    error: Option<String>,
+}
+
+/// One long-lived Python process shared by both translation directions.
+pub(crate) struct TranslationWorkerProcess {
+    _child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+pub(crate) type TranslationWorkerState = Mutex<Option<TranslationWorkerProcess>>;
+
+async fn request_translation(
+    worker: &mut Option<TranslationWorkerProcess>,
+    models_root: &std::path::Path,
+    direction: &str,
+    text: &str,
+) -> Result<String, String> {
+    if worker.is_none() {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/opus_mt_translate.py");
+        let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON")
+            .unwrap_or_else(|_| "python3".to_owned());
+        let mut child = Command::new(python)
+            .arg(script)
+            .arg("--models-root")
+            .arg(models_root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("Cannot start OPUS-MT worker: {error}"))?;
+        let stdin = child.stdin.take().ok_or("Missing worker stdin")?;
+        let stdout = child.stdout.take().ok_or("Missing worker stdout")?;
+        *worker = Some(TranslationWorkerProcess {
+            _child: child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        });
+    }
+    let worker = worker.as_mut().ok_or("Worker unavailable")?;
+    let input = serde_json::json!({"text": text, "direction": direction}).to_string();
+    worker.stdin.write_all(input.as_bytes()).await.map_err(|e| e.to_string())?;
+    worker.stdin.write_all(b"\\n").await.map_err(|e| e.to_string())?;
+    worker.stdin.flush().await.map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    if worker.stdout.read_line(&mut line).await.map_err(|e| e.to_string())? == 0 {
+        return Err("OPUS-MT worker exited unexpectedly".into());
+    }
+    let response: WorkerResponse = serde_json::from_str(&line)
+        .map_err(|e| format!("Invalid worker response: {e}"))?;
+    match (response.translation, response.error) {
+        (Some(translation), None) => Ok(translation),
+        (_, Some(error)) => Err(format!("OPUS-MT worker failed: {}", error.chars().take(1024).collect::<String>())),
+        _ => Err("Worker response contains no translation".into()),
+    }
 }
 
 fn model_directory(root: &std::path::Path, pair: &TranslationPair) -> PathBuf {
@@ -51,38 +108,26 @@ pub(crate) async fn translate(
         return Err((StatusCode::BAD_REQUEST, "model directory escapes models root".into()));
     }
 
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/opus_mt_translate.py");
-    let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON")
-        .unwrap_or_else(|_| "python3".to_owned());
-    let mut child = Command::new(python)
-        .arg(script)
-        .arg("--model-dir")
-        .arg(canonical_model)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE,
-            format!("Cannot start OPUS-MT worker: {error}")))?;
-    let input = serde_json::json!({ "text": request.text }).to_string();
-    let mut stdin = child.stdin.take().expect("worker stdin configured");
-    stdin.write_all(input.as_bytes()).await
-        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
-    drop(stdin);
-    let output = timeout(Duration::from_secs(120), child.wait_with_output()).await
-        .map_err(|_| (StatusCode::GATEWAY_TIMEOUT, "OPUS-MT inference timed out".into()))?
-        .map_err(|error| (StatusCode::BAD_GATEWAY, error.to_string()))?;
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err((StatusCode::BAD_GATEWAY,
-            format!("OPUS-MT worker failed: {}", error.chars().take(1024).collect::<String>())));
-    }
-    let response: WorkerResponse = serde_json::from_slice(&output.stdout)
-        .map_err(|error| (StatusCode::BAD_GATEWAY, format!("Invalid worker response: {error}")))?;
+    let mut guard = state.translation_worker.lock().await;
+    let result = timeout(
+        Duration::from_secs(120),
+        request_translation(&mut guard, &canonical_root, pair.model_key(), &request.text),
+    ).await;
+    let translation = match result {
+        Ok(Ok(translation)) => translation,
+        Ok(Err(error)) => {
+            // Discard broken workers so the next request starts a clean process.
+            *guard = None;
+            return Err((StatusCode::BAD_GATEWAY, error));
+        }
+        Err(_) => {
+            *guard = None;
+            return Err((StatusCode::GATEWAY_TIMEOUT, "OPUS-MT inference timed out".into()));
+        }
+    };
+    drop(guard);
     Ok(Json(serde_json::json!({
-        "translation": response.translation,
+        "translation": translation,
         "source_language": pair.source,
         "target_language": pair.target,
         "model": format!("opus-mt-{}", pair.model_key()),
