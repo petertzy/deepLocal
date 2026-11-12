@@ -6,41 +6,93 @@ runs a local Python/CTranslate2 helper on the user's machine. Models are
 downloaded only after the user explicitly selects Install in the Models tab.
 The translation endpoint does not call a cloud translation service.
 
-## Prerequisites
+## Scope: personal source-checkout workflow
 
-- Python 3 with `ctranslate2` and `sentencepiece` installed.
-- A **Marian OPUS-MT model converted to CTranslate2 format** for each translation
-  direction. Original Hugging Face PyTorch weights are not directly supported.
-- A converted model directory containing `model.bin`, `source.spm`, and
-  `target.spm`. The SentencePiece files must match the original model.
+This experimental branch is intended for a single developer running deepLocal
+from a local source checkout. It is **not** intended to be merged into main or
+distributed as a packaged desktop application. There is no requirement to
+publish standalone Python runtimes, sign installers, or support clean end-user
+machines. All inference remains local; the browser extension can use the
+loopback API without loading a GGUF chat model.
 
-Install the worker packages into your chosen Python environment:
+### Quick start (macOS/Linux)
+
+After the one-time Python environment and models are prepared, start both
+the Rust backend and React UI from the repository root with **one command**:
 
 ```bash
-python3 -m pip install ctranslate2 sentencepiece
+bash scripts/start-opus.sh
 ```
 
-Conversion is a separate **one-time preparation step** and may require
-`transformers`, `torch`, and `sentencepiece` on the conversion machine.
-For example, after obtaining a compatible Marian checkpoint:
+Open `http://127.0.0.1:5173/` and select **Models** to confirm the
+translation runtime is available and both directions are installed.
+The API listens on `http://127.0.0.1:14567/v1`. Keep the terminal open
+while using the browser extension.
+
+The launcher automatically selects `.venv-opus/bin/python`, checks that
+`ctranslate2` and `sentencepiece` import successfully, exports
+`DEEPLOCAL_OPUS_MT_PYTHON`, and delegates to the existing development
+launcher. It does **not** download model weights, overwrite a virtual
+environment, or modify existing manually installed models.
+
+For a new checkout with Python 3 installed, explicitly opt in to a one-time
+virtual environment setup (this downloads Python packages):
+
+```bash
+bash scripts/start-opus.sh --setup
+```
+
+This creates `.venv-opus` only if it is missing and installs the two
+runtime packages only when imports fail. Model weights are installed
+separately in the **Models** tab, or can be reused from an existing
+`models/opus-mt/en-zh` and `models/opus-mt/zh-en` directory. The
+launcher will not silently install Python packages during normal startup.
+
+If an API server is already running, use:
+
+```bash
+bash scripts/start-opus.sh --restart
+```
+
+Restarting applies the selected Python interpreter to the backend. To stop
+the development servers, run `bash scripts/start-opus.sh --stop`.
+The underlying `scripts/start-dev.sh` still handles the Rust/Node/llama.cpp
+development prerequisites; `DEEPLOCAL_SKIP_LLAMA_INSTALL=1` can be used
+when GGUF chat is not needed.
+
+To use a different Python environment without modifying it:
+
+```bash
+DEEPLOCAL_OPUS_MT_PYTHON=/absolute/path/to/python bash scripts/start-opus.sh
+```
+
+### Models and manual setup
+
+Each direction needs a compatible CTranslate2 Marian model with
+`model.bin`, `source.spm`, and `target.spm`. The existing manually
+converted models remain supported and appear as **Installed (manual files)**.
+Do not delete them just to test the downloader.
+
+A separate one-time conversion workflow may require Transformers and PyTorch,
+but those packages are **not** required for translation inference.
+For a manual conversion example:
 
 ```bash
 ct2-transformers-converter --model Helsinki-NLP/opus-mt-en-zh --output_dir ./models/opus-mt/en-zh
 ```
 
-Ensure `source.spm` and `target.spm` from the **same checkpoint** are
-present in that output directory. Converter behavior and filenames can vary
-by model and converter version; verify the files before running the API.
-For reverse translation, convert a separate Chinese-to-English checkpoint
-into `./models/opus-mt/zh-en`. A forward model is not reversible.
+The tokenizer files must come from the same checkpoint; the reverse direction
+requires a different checkpoint. Prefer reusing already working models.
 
-If deepLocal uses a custom models directory, place the `opus-mt` folder
-inside that configured directory. If the worker packages live in a virtual
-environment, point to its interpreter:
+### Browser extension
 
-```bash
-export DEEPLOCAL_OPUS_MT_PYTHON=/absolute/path/to/venv/bin/python
-```
+Use the experimental `translation-model-opus` pull request in
+`petertzy/sovereign-bilingual-reader`. Configure the provider as
+`deepLocal (OPUS-MT)`, the API base URL as
+`http://127.0.0.1:14567/v1`, and a supported target language
+(English or Simplified Chinese). Translation is local, but OPUS-MT may
+produce awkward or incorrect translations of long sentences, names, and
+dates. Check important text against the source.
 
 ## Isolated installer integration tests
 
@@ -105,55 +157,14 @@ bundle. Translation model weights are never bundled in release artifacts.
 The small Python worker is embedded as text in the Rust API binary so a
 packaged app does not require a source checkout.
 
-## Runtime deployment strategy
+## Runtime selection
 
-Model download and runtime installation are intentionally separate.
-
-### Managed runtime discovery foundation
-
-The API now selects the Python interpreter in this order:
-
-1. `DEEPLOCAL_OPUS_MT_PYTHON`, when explicitly set.
-2. `<models-root>/.translation-runtime/bin/python` on macOS/Linux, or
-   `<models-root>/.translation-runtime/Scripts/python.exe` on Windows,
-   when that interpreter exists.
-3. The system `python3` fallback.
-
-`GET /runtime/translation/runtime/check` reports `ready`, `source`,
-`managed_installed`, and `managed_directory` and tests CTranslate2 and
-SentencePiece imports. The desktop Models panel displays the detected
-runtime source. No existing virtual environment or model installation is
-modified by this discovery feature.
-
-**Important:** managed runtime discovery is not an installer. There is no
-trusted, signed, per-platform runtime archive published for this prototype
-yet. Do not enable a one-click install control until an archive publishing
-pipeline, pinned release metadata, SHA-256 validation, safe extraction,
-rollback, and platform integration tests exist. Python's `venv` module
-still depends on an existing base interpreter and is not a substitute for
-a standalone runtime distribution.
-
-
-1. **Current development mode:** run Python with CTranslate2 and SentencePiece
-   installed and set `DEEPLOCAL_OPUS_MT_PYTHON` to the interpreter. Use
-   **Check runtime** in Models to test these imports. Neither PyTorch nor
-   Transformers is required to run preconverted checkpoints.
-2. **Production deployment (not implemented):** publish a versioned, signed
-   per-platform translation worker/runtime archive as an optional download
-   into the application data directory. Verify its pinned SHA-256 before
-   activation, keep it outside the app bundle, show progress, and allow
-   removal. Do not execute arbitrary installation commands or silently run
-   `pip install` on an end user's machine.
-3. A production worker should ideally use the CTranslate2 native runtime
-   directly (or a tightly controlled standalone Python runtime). Keep model
-   binaries and the runtime separately updatable. Validate macOS universal/
-   arm64, Windows, and Linux builds independently before enabling a one-click
-   runtime installation button.
-
-Until the optional runtime distribution exists, the Models page downloads
-and verifies model data but does **not** promise a ready-to-use translation
-environment on clean end-user installations. There is no cloud translation
-fallback.
+The API uses `DEEPLOCAL_OPUS_MT_PYTHON` when set, then an existing
+`<models-root>/.translation-runtime` interpreter, and finally `python3`.
+For this personal source-checkout workflow, the recommended and tested
+option is `.venv-opus/bin/python`, selected automatically by
+`scripts/start-opus.sh`. No standalone runtime distribution or packaged
+app installer is planned for this branch.
 
 ### Model manager API
 
@@ -176,7 +187,7 @@ are pinned to that resolved revision.
 ## Request
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/translate \
+curl -sS -X POST http://127.0.0.1:14567/v1/translate \
   -H 'Content-Type: application/json' \
   -d '{"text":"Hello, world!","source_language":"en","target_language":"zh"}'
 ```
