@@ -179,6 +179,37 @@ enabled:
 Use `./scripts/uninstall-local.sh --remove-llama` to also remove Homebrew
 `llama.cpp` after cleaning local project artifacts.
 
+### Bundled OPUS-MT for unsigned macOS releases
+
+The existing macOS packaging command also builds a standalone OPUS-MT worker
+containing Python, CTranslate2, SentencePiece, and their required native
+libraries. No OPUS-MT model weights are included in the application archive.
+
+Run from the repository root on macOS:
+
+```bash
+bash scripts/package-macos-app.sh
+```
+
+Packaging requires Python 3, Rust, Node.js, and network access for build-time
+dependencies. It creates a PyInstaller one-directory worker under
+`apps/desktop/src-tauri/resources/opus-runtime` and verifies its
+`--self-test` both before and after Tauri packaging. The output is
+`dist/deepLocal.app`, `dist/deepLocal-macos.zip`, and, when available,
+`dist/deepLocal-macos.dmg`.
+
+In the packaged app, **Translation** reports a **bundled** runtime and does
+not show source-checkout Install / Repair / Remove runtime controls. Users
+download translation models separately from that page. The worker does not
+require Python or pip on the end-user machine. Source-checkout development
+commands are unchanged.
+
+The macOS release is unsigned and not notarized by default. Gatekeeper may
+require manual approval on first launch. The build is architecture-specific:
+build on each target macOS architecture separately. Validate the actual app
+and model download workflow before distributing; the packaging changes have
+not yet been verified on a macOS host.
+
 ## Packaging A macOS App
 
 Build a shareable Tauri macOS app from the project root:
