@@ -42,6 +42,7 @@ pub struct ApiState {
     pub downloads: Arc<RwLock<HashMap<String, DownloadJob>>>,
     pub storage: Arc<Mutex<Storage>>,
     pub models_directory: PathBuf,
+    translation_worker: Arc<translation_api::TranslationWorkerState>,
     pub search_filters: Arc<RwLock<SearchFiltersConfig>>,
     pub huggingface_size_cache: Arc<RwLock<HashMap<String, HashMap<String, u64>>>>,
 }
@@ -165,6 +166,7 @@ fn router_with_storage(
             downloads: Arc::new(RwLock::new(restored_downloads)),
             storage: Arc::new(Mutex::new(storage)),
             models_directory: models_root,
+            translation_worker: Arc::new(Mutex::new(None)),
             search_filters: Arc::new(RwLock::new(initial_search_filters)),
             huggingface_size_cache: Arc::new(RwLock::new(HashMap::new())),
         }));
