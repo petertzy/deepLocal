@@ -80,6 +80,10 @@ pub(crate) async fn manage(
         return (StatusCode::CONFLICT,
             "A custom Python interpreter is active. Restart without DEEPLOCAL_OPUS_MT_PYTHON to manage the local runtime.").into_response();
     }
+    if request.action == "repair" {
+        let mut worker = state.translation_worker.lock().await;
+        stop_worker(&mut worker).await;
+    }
     let result = match request.action.as_str() {
         "remove" => {
             if !dir.exists() { Err("No script-managed runtime is installed.".to_owned()) }
@@ -107,20 +111,12 @@ pub(crate) async fn manage(
 
 async fn install(dir: &Path, repair: bool) -> Result<(), String> {
     if !dir.exists() {
-        let parent = dir.parent().ok_or("Invalid runtime directory")?;
-        let staging = parent.join(format!(".opus-runtime-setup-{}", std::process::id()));
-        if staging.exists() { return Err("An incomplete runtime setup directory exists.".into()); }
-        let base = Path::new("python3");
-        let result = async {
-            let path = staging.to_str().ok_or("Invalid runtime path")?;
-            run(base, &["-m", "venv", path], Duration::from_secs(90)).await?;
-            run(&python(&staging), &["-m", "pip", "install", "ctranslate2==4.9.0", "sentencepiece==0.2.3"], Duration::from_secs(300)).await?;
-            run(&python(&staging), &["-c", "import ctranslate2, sentencepiece"], Duration::from_secs(15)).await?;
-            tokio::fs::write(staging.join(MARKER), b"deepLocal OPUS-MT managed runtime\n").await.map_err(|e| e.to_string())?;
-            tokio::fs::rename(&staging, dir).await.map_err(|e| e.to_string())
-        }.await;
-        if result.is_err() { let _ = tokio::fs::remove_dir_all(&staging).await; }
-        result
+        // Python virtual environments contain absolute paths and must be created in place.
+        let path = dir.to_str().ok_or("Invalid runtime path")?;
+        run(Path::new("python3"), &["-m", "venv", path], Duration::from_secs(90)).await?;
+        tokio::fs::write(dir.join(MARKER), b"deepLocal OPUS-MT managed runtime\n").await.map_err(|e| e.to_string())?;
+        run(&python(dir), &["-m", "pip", "install", "ctranslate2==4.9.0", "sentencepiece==0.2.3"], Duration::from_secs(300)).await?;
+        run(&python(dir), &["-c", "import ctranslate2, sentencepiece"], Duration::from_secs(15)).await
     } else {
         let interpreter = python(dir);
         if !interpreter.is_file() { return Err("Managed Python executable is missing.".into()); }
