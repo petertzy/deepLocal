@@ -18,6 +18,7 @@ type TranslationModel = {
   repository: string;
   directory: string;
   installed: boolean;
+  directory_exists: boolean;
   size_bytes?: number | null;
   verified_manifest: boolean;
 };
@@ -144,7 +145,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
           <div className="translationModel" key={model.direction}>
             <div className="translationModelHeading">
               <strong>{model.name}</strong>
-              <span>{model.installed ? model.verified_manifest ? "Installed (verified on download)" : "Installed (manual files)" : "Not installed"}</span>
+              <span>{model.installed ? model.verified_manifest ? "Installed (verified on download)" : "Installed (manual files)" : model.directory_exists ? "Incomplete model directory" : "Not installed"}</span>
             </div>
             <small>{model.repository} · CTranslate2 · CC BY 4.0{model.size_bytes ? ` · ${(model.size_bytes / 1048576).toFixed(1)} MB on disk` : ""}</small>
             <code title={model.directory}>{model.directory}</code>
@@ -157,7 +158,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
             {lastError && !active && !model.installed &&
               <p className="translationError" role="alert">{lastError.error || "Last download failed. Retry when ready."}</p>}
             <div className="translationActions">
-              {!model.installed && !active &&
+              {!model.directory_exists && !active &&
                 <button type="button" onClick={() => void action("install", model.direction)} disabled={busy !== null}>
                   <Download size={15} /> Install
                 </button>}
@@ -165,8 +166,8 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
                 <button type="button" className="secondaryAction" onClick={() => void cancel(active.id)} disabled={busy !== null}>
                   Cancel download
                 </button>}
-              {model.installed && <>
-                {model.verified_manifest &&
+              {model.directory_exists && <>
+                {model.installed && model.verified_manifest &&
                   <button type="button" className="secondaryAction" onClick={() => void action("verify", model.direction)} disabled={busy !== null}>
                     <ShieldCheck size={15} /> Verify files
                   </button>}
