@@ -36,12 +36,13 @@ async fn request_translation(
     text: &str,
 ) -> Result<String, String> {
     if worker.is_none() {
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/opus_mt_translate.py");
+        // Embed the small worker script; packaged desktop apps do not need a source checkout.
         let python = std::env::var("DEEPLOCAL_OPUS_MT_PYTHON")
             .unwrap_or_else(|_| "python3".to_owned());
         let mut child = Command::new(python)
-            .arg(script)
+            .arg("-u")
+            .arg("-c")
+            .arg(include_str!("../../../scripts/opus_mt_translate.py"))
             .arg("--models-root")
             .arg(models_root)
             .stdin(std::process::Stdio::piped())
