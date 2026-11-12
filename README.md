@@ -36,6 +36,11 @@ reinstalling packages. All commands below run from the repository root:
 | Remove only the script-managed Python runtime | `bash scripts/start-opus.sh --remove-runtime` |
 | Display command help | `bash scripts/start-opus.sh --help` |
 
+The **Translation** page in the left sidebar manages both OPUS-MT model
+directions and the optional Python runtime. Use **Install runtime**,
+**Repair runtime**, or **Remove runtime** there. The original **Models**
+page remains dedicated to GGUF discovery, downloads, and model lifecycle.
+
 Existing translation models and legacy virtual environments are preserved.
 The launcher needs an installed Python 3 interpreter and internet access for
 its first dependency installation. For cleanup instructions, extension setup,
