@@ -8,7 +8,6 @@ PYTHON="${DEEPLOCAL_OPUS_MT_PYTHON:-$VENV_DIR/bin/python}"
 BACKEND_PORT="${DEEPLOCAL_BACKEND_PORT:-${DEELOCAL_BACKEND_PORT:-14567}}"
 SETUP=0
 RESTART=0
-PASSTHROUGH=()
 
 usage() {
   cat <<'EOF'
@@ -32,7 +31,7 @@ EOF
 for arg in "$@"; do
   case "$arg" in
     --setup) SETUP=1 ;;
-    --restart) RESTART=1; PASSTHROUGH+=(--restart) ;;
+    --restart) RESTART=1 ;;
     --stop) exec "$ROOT_DIR/scripts/start-dev.sh" --stop ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
@@ -83,4 +82,7 @@ fi
 export DEEPLOCAL_OPUS_MT_PYTHON="$PYTHON"
 echo "Using OPUS-MT Python: $DEEPLOCAL_OPUS_MT_PYTHON"
 echo "Model weights are loaded from the existing deepLocal models directory."
-exec "$ROOT_DIR/scripts/start-dev.sh" "${PASSTHROUGH[@]}"
+if [[ "$RESTART" -eq 1 ]]; then
+  exec "$ROOT_DIR/scripts/start-dev.sh" --restart
+fi
+exec "$ROOT_DIR/scripts/start-dev.sh"
