@@ -6,6 +6,25 @@
 
 use std::path::{Path, PathBuf};
 
+/// The bundled worker contains its own Python interpreter and native libraries.
+pub(crate) fn bundled_worker() -> Option<PathBuf> {
+    let path = std::env::var_os("DEEPLOCAL_OPUS_MT_WORKER").map(PathBuf::from)?;
+    path.is_file().then_some(path)
+}
+
+pub(crate) async fn check_bundled_worker(worker: &Path) -> bool {
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::process::Command::new(worker)
+                .arg("--self-test")
+                .kill_on_drop(true)
+                .output()
+        ).await,
+        Ok(Ok(output)) if output.status.success()
+    )
+}
+
 pub(crate) fn managed_runtime_directory(models_root: &Path) -> PathBuf {
     models_root.join(".translation-runtime")
 }
