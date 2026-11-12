@@ -61,7 +61,7 @@ async fn request_translation(
     let worker = worker.as_mut().ok_or("Worker unavailable")?;
     let input = serde_json::json!({"text": text, "direction": direction}).to_string();
     worker.stdin.write_all(input.as_bytes()).await.map_err(|e| e.to_string())?;
-    worker.stdin.write_all(b"\\n").await.map_err(|e| e.to_string())?;
+    worker.stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
     worker.stdin.flush().await.map_err(|e| e.to_string())?;
     let mut line = String::new();
     if worker.stdout.read_line(&mut line).await.map_err(|e| e.to_string())? == 0 {
