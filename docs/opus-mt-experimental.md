@@ -64,6 +64,32 @@ interpreter without installing packages into it. To use an alternate virtual
 environment directory, set `DEEPLOCAL_OPUS_MT_VENV`. Custom directories
 are never removed by `--remove-runtime`.
 
+### Runtime controls in the Models page
+
+The **Models** page provides **Install runtime**, **Repair runtime**, and
+**Remove runtime** for the repository-local `.tools/opus-runtime` Python
+environment. These controls are intended only for the personal source-checkout
+workflow, not packaged application distribution.
+
+- **Install runtime** creates a new Python virtual environment and installs
+  pinned CTranslate2 and SentencePiece versions. Python 3 and an internet
+  connection are required. The backend must already be running.
+- **Repair runtime** reinstalls the dependencies in the marked managed
+  environment, after stopping the cached translation worker.
+- **Remove runtime** requires confirmation, stops the translation worker,
+  and deletes only the marked managed Python environment. It does not remove
+  the English/Chinese model files or custom Python environments.
+
+The operations run on the local Rust backend and may take several minutes.
+The page displays a completion or error message. For a complete clean-start
+test, run `bash scripts/start-opus.sh --stop`, then
+`bash scripts/start-opus.sh --remove-runtime`, and start the regular
+development server with `bash scripts/start-dev.sh`. From the Models page,
+click **Install runtime**. The normal
+`bash scripts/start-opus.sh` command still installs the runtime automatically
+before starting, so it will usually show **Repair runtime** and
+**Remove runtime** rather than **Install runtime**.
+
 ### Removing old, manually created virtual environments
 
 The original `.venv-opus` and `.venv-opus-convert` environments are not
