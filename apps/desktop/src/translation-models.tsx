@@ -40,6 +40,8 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
   const [runtimeNotice, setRuntimeNotice] = useState("");
   const [runtimeSource, setRuntimeSource] = useState<string | null>(null);
   const [runtimeReady, setRuntimeReady] = useState<boolean | null>(null);
+  const [managedInstalled, setManagedInstalled] = useState(false);
+  const [confirmRemoveRuntime, setConfirmRemoveRuntime] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -107,15 +109,39 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
     }
   }
 
+  async function manageRuntime(action: "install" | "repair" | "remove") {
+    setBusy("runtime-operation");
+    setRuntimeNotice(`${action === "remove" ? "Removing" : "Preparing"} runtime. Please wait...`);
+    try {
+      const response = await fetch(`${apiBase}/runtime/translation/runtime/manage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const body = await response.text();
+      let result: { message?: string };
+      try { result = JSON.parse(body); } catch { result = {}; }
+      if (!response.ok) throw new Error(result.message || body || `HTTP ${response.status}`);
+      setConfirmRemoveRuntime(false);
+      await checkRuntime();
+      setRuntimeNotice(result.message || "Runtime operation completed.");
+    } catch (error) {
+      setRuntimeNotice(error instanceof Error ? error.message : "Runtime operation failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function checkRuntime() {
     setBusy("runtime");
     try {
       const response = await fetch(`${apiBase}/runtime/translation/runtime/check`);
       if (!response.ok) throw new Error("Runtime check failed.");
-      const result = await response.json() as { ready: boolean; message: string; source?: string };
+      const result = await response.json() as { ready: boolean; message: string; source?: string; managed_installed?: boolean };
       setRuntimeNotice(result.message);
       setRuntimeSource(result.source || null);
       setRuntimeReady(result.ready);
+      setManagedInstalled(Boolean(result.managed_installed));
     } catch {
       setRuntimeNotice("Cannot reach the translation runtime.");
       setRuntimeReady(null);
@@ -134,12 +160,29 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
       <p>Install only the directions you need. Converted models are stored in the deepLocal models folder, not inside the app or browser extension.</p>
       <div className="translationRuntime">
         <span>Runtime: {runtimeSource === "managed" ? "app-managed" : runtimeSource === "environment" ? "custom Python" : "system Python"} / CTranslate2 / SentencePiece</span>
-        <button type="button" className="secondaryAction" onClick={() => void checkRuntime()} disabled={busy === "runtime"}>
+        <button type="button" className="secondaryAction" onClick={() => void checkRuntime()} disabled={busy !== null}>
           <RefreshCw size={15} /> Check runtime
         </button>
       </div>
+      <div className="translationActions">
+        {!managedInstalled && <button type="button" onClick={() => void manageRuntime("install")} disabled={busy !== null}>
+          <Download size={15} /> Install runtime
+        </button>}
+        {managedInstalled && <>
+          <button type="button" className="secondaryAction" onClick={() => void manageRuntime("repair")} disabled={busy !== null}>
+            <RefreshCw size={15} /> Repair runtime
+          </button>
+          {confirmRemoveRuntime ? <>
+            <span>Remove only the managed Python environment? Translation models will be kept.</span>
+            <button type="button" className="dangerAction" onClick={() => void manageRuntime("remove")} disabled={busy !== null}>Confirm remove</button>
+            <button type="button" className="secondaryAction" onClick={() => setConfirmRemoveRuntime(false)}>Keep</button>
+          </> : <button type="button" className="dangerAction" onClick={() => setConfirmRemoveRuntime(true)} disabled={busy !== null}>
+            <Trash2 size={15} /> Remove runtime
+          </button>}
+        </>}
+      </div>
       {runtimeNotice && <p role="status">{runtimeNotice}</p>}
-      {runtimeReady === false && <p>The optional one-click runtime installer is not available yet. Existing Python environments remain supported; model downloads and the runtime are managed separately.</p>}
+      <p>Runtime management requires a local source checkout and Python 3. Package installation needs internet access. Custom Python environments and model files are never removed.</p>
       {!catalog && <p>Reading available translation models...</p>}
       {catalog?.models.map((model) => {
         const jobs = downloads.filter(job => job.repo === model.repository &&
@@ -192,7 +235,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
           </div>
         );
       })}
-      <p className="translationFootnote">Model files are downloaded from Hugging Face and checked before installation. deepLocal automatically detects an app-managed runtime when present and supports a custom Python override. Runtime distribution is not yet available; no model weights are bundled.</p>
+      <p className="translationFootnote">Model files are downloaded from Hugging Face and checked before installation. deepLocal automatically detects an app-managed runtime when present and supports a custom Python override. The source-checkout runtime can be managed above; no model weights are bundled.</p>
       {notice && <p role="status">{notice}</p>}
     </section>
   );
