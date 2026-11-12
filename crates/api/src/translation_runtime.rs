@@ -25,6 +25,18 @@ pub(crate) fn selected_python(models_root: &Path) -> (PathBuf, &'static str) {
             return (PathBuf::from(explicit), "environment");
         }
     }
+    // Prefer the source-checkout runtime installed through the Models page.
+    if let Ok(cwd) = std::env::current_dir() {
+        let local = cwd.join(".tools/opus-runtime");
+        let interpreter = if cfg!(windows) {
+            local.join("Scripts/python.exe")
+        } else {
+            local.join("bin/python")
+        };
+        if local.join(".deeplocal-opus-managed").is_file() && interpreter.is_file() {
+            return (interpreter, "managed");
+        }
+    }
     let managed = managed_python(models_root);
     if managed.is_file() {
         return (managed, "managed");
