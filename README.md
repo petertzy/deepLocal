@@ -25,12 +25,22 @@ bash scripts/start-opus.sh
 ```
 
 Open `http://127.0.0.1:5173/`. Later launches reuse the runtime without
-reinstalling packages. Use `bash scripts/start-opus.sh --setup` to prepare
-without starting, `--restart` for an existing API, and `--remove-runtime`
-to remove only the managed Python environment. Existing translation models
-and legacy virtual environments are preserved.
-See [OPUS-MT source-checkout guide](docs/opus-mt-experimental.md) for
-configuration, browser extension integration, and troubleshooting.
+reinstalling packages. All commands below run from the repository root:
+
+| Action | Complete command |
+| --- | --- |
+| Start the local OPUS-MT development UI | `bash scripts/start-opus.sh` |
+| Prepare the Python runtime without starting servers | `bash scripts/start-opus.sh --setup` |
+| Restart the development servers | `bash scripts/start-opus.sh --restart` |
+| Stop the development servers | `bash scripts/start-opus.sh --stop` |
+| Remove only the script-managed Python runtime | `bash scripts/start-opus.sh --remove-runtime` |
+| Display command help | `bash scripts/start-opus.sh --help` |
+
+Existing translation models and legacy virtual environments are preserved.
+The launcher needs an installed Python 3 interpreter and internet access for
+its first dependency installation. For cleanup instructions, extension setup,
+and troubleshooting, see the
+[OPUS-MT source-checkout guide](docs/opus-mt-experimental.md).
 
 ## Install the packaged app
 
