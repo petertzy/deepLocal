@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 const REQUIRED_FILES: &[&str] = &[
     "model.bin", "source.spm", "target.spm", "config.json", "shared_vocabulary.json",
+    "README.md",
 ];
 const RECEIPT: &str = ".deeplocal-opus-mt.json";
 
@@ -39,7 +40,7 @@ fn model_path(root: &Path, direction: &str) -> Option<PathBuf> {
 }
 
 fn has_model_files(dir: &Path) -> bool {
-    ["model.bin", "source.spm", "target.spm"]
+    ["model.bin", "source.spm", "target.spm", "config.json", "shared_vocabulary.json"]
         .iter()
         .all(|file| dir.join(file).is_file())
 }
@@ -118,11 +119,15 @@ pub(crate) async fn list_models(
         let (label, repo) = model_source(direction).expect("known direction");
         let dir = model_path(&state.models_directory, direction).expect("known direction");
         let installed = has_model_files(&dir);
+        let size_bytes: u64 = REQUIRED_FILES.iter().filter_map(|name|
+            std::fs::metadata(dir.join(name)).ok().map(|metadata| metadata.len())
+        ).sum();
         models.push(serde_json::json!({
             "direction": direction,
             "name": label,
             "repository": repo,
             "installed": installed,
+            "size_bytes": (size_bytes > 0).then_some(size_bytes),
             "verified_manifest": installed && dir.join(RECEIPT).is_file(),
             "directory": dir.to_string_lossy()
         }));
