@@ -40,22 +40,24 @@ Open `http://127.0.0.1:5173/`. The API is at
 weights; existing manually installed `models/opus-mt/en-zh` and
 `models/opus-mt/zh-en` directories remain usable.
 
-Other commands:
+### Runtime command reference
 
-```bash
-bash scripts/start-opus.sh --setup
-bash scripts/start-opus.sh --restart
-bash scripts/start-opus.sh --stop
-bash scripts/start-opus.sh --remove-runtime
-```
+Run each command from the deepLocal repository root. Each example includes
+the full script invocation and can be copied independently.
 
-`--setup` prepares the environment without starting servers.
-`--restart` applies the runtime to an already-running API.
-`--remove-runtime` stops the development servers and deletes **only**
-`.tools/opus-runtime`, and only when it contains the launcher's management
-marker. It preserves model weights, `.venv-opus`, `.venv-opus-convert`,
-other Python environments, and GGUF models. The next normal launch will
-recreate the runtime and reinstall its packages.
+| Action | Complete command | Notes |
+| --- | --- | --- |
+| Start normally | `bash scripts/start-opus.sh` | Creates missing dependencies on first run |
+| Install or verify dependencies only | `bash scripts/start-opus.sh --setup` | Does not start the servers |
+| Restart both development servers | `bash scripts/start-opus.sh --restart` | Applies the selected Python interpreter |
+| Stop both development servers | `bash scripts/start-opus.sh --stop` | Preserves installed dependencies and models |
+| Remove the managed Python runtime | `bash scripts/start-opus.sh --remove-runtime` | Stops servers; deletes only the marked `.tools/opus-runtime` |
+| Show all available options | `bash scripts/start-opus.sh --help` | Does not modify files |
+
+The removal command preserves model weights, `.venv-opus`,
+`.venv-opus-convert`, other Python environments, and GGUF models.
+The next normal launch recreates the managed runtime and installs its
+dependencies again.
 
 If `DEEPLOCAL_OPUS_MT_PYTHON` is explicitly set, the launcher uses that
 interpreter without installing packages into it. To use an alternate virtual
