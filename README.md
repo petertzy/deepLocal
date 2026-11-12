@@ -36,6 +36,22 @@ reinstalling packages. All commands below run from the repository root:
 | Remove only the script-managed Python runtime | `bash scripts/start-opus.sh --remove-runtime` |
 | Display command help | `bash scripts/start-opus.sh --help` |
 
+To test **Translation → Install runtime** without preparing OPUS-MT
+dependencies before the UI starts, stop the servers and remove the
+script-managed runtime first, then launch the regular development server:
+
+```bash
+bash scripts/start-opus.sh --stop
+bash scripts/start-opus.sh --remove-runtime
+DEEPLOCAL_SKIP_LLAMA_INSTALL=1 bash scripts/start-dev.sh
+```
+
+Open `http://127.0.0.1:5173/`, select **Translation**, and click
+**Install runtime**. This command skips llama.cpp installation; unlike
+`bash scripts/start-opus.sh`, it does **not** preinstall OPUS-MT Python
+packages. Python 3 must already be installed. Keep existing translation
+model files intact.
+
 The **Translation** page in the left sidebar manages both OPUS-MT model
 directions and the optional Python runtime. Use **Install runtime**,
 **Repair runtime**, or **Remove runtime** there. The original **Models**
