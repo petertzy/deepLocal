@@ -145,8 +145,14 @@ pub(crate) async fn list_models(
 
 pub(crate) async fn check_runtime(headers: HeaderMap, State(state): State<Arc<ApiState>>) -> impl IntoResponse {
     if !trusted_ui_origin(&headers) { return StatusCode::FORBIDDEN.into_response(); }
-    let (python, source) = crate::translation_runtime::selected_python(&state.models_directory);
-    let ready = crate::translation_runtime::check_dependencies(&python).await;
+    let bundled = crate::translation_runtime::bundled_worker();
+    let (python, python_source) = crate::translation_runtime::selected_python(&state.models_directory);
+    let ready = if let Some(worker) = &bundled {
+        crate::translation_runtime::check_bundled_worker(worker).await
+    } else {
+        crate::translation_runtime::check_dependencies(&python).await
+    };
+    let source = if bundled.is_some() { "bundled" } else { python_source };
     let local_runtime = std::env::current_dir().ok().map(|root| root.join(".tools/opus-runtime"));
     let managed_installed = local_runtime.as_ref().is_some_and(|dir|
         dir.join(".deeplocal-opus-managed").is_file() && dir.join("bin/python").is_file()
@@ -155,9 +161,10 @@ pub(crate) async fn check_runtime(headers: HeaderMap, State(state): State<Arc<Ap
         "ready": ready,
         "source": source,
         "managed_installed": managed_installed,
+        "bundled": bundled.is_some(),
         "managed_directory": local_runtime.map(|dir| dir.to_string_lossy().into_owned()),
         "message": if ready {
-            "Python translation dependencies are available."
+            "OPUS-MT translation runtime is available."
         } else {
             "No usable translation runtime found. Use Install runtime to create a source-checkout Python environment, or configure DEEPLOCAL_OPUS_MT_PYTHON."
         }
