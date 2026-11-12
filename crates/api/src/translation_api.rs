@@ -44,11 +44,17 @@ async fn request_translation(
 ) -> Result<String, String> {
     if worker.is_none() {
         // Embed the small worker script; packaged desktop apps do not need a source checkout.
-        let (python, _) = crate::translation_runtime::selected_python(models_root);
-        let mut child = Command::new(python)
-            .arg("-u")
-            .arg("-c")
-            .arg(include_str!("../../../scripts/opus_mt_translate.py"))
+        let bundled = crate::translation_runtime::bundled_worker();
+        let mut command = if let Some(executable) = bundled {
+            Command::new(executable)
+        } else {
+            let (python, _) = crate::translation_runtime::selected_python(models_root);
+            let mut command = Command::new(python);
+            command.arg("-u").arg("-c")
+                .arg(include_str!("../../../scripts/opus_mt_translate.py"));
+            command
+        };
+        let mut child = command
             .arg("--models-root")
             .arg(models_root)
             .stdin(std::process::Stdio::piped())
