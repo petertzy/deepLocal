@@ -127,6 +127,7 @@ pub(crate) async fn list_models(
             "name": label,
             "repository": repo,
             "installed": installed,
+            "directory_exists": dir.exists(),
             "size_bytes": (size_bytes > 0).then_some(size_bytes),
             "verified_manifest": installed && dir.join(RECEIPT).is_file(),
             "directory": dir.to_string_lossy()
