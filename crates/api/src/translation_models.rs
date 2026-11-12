@@ -183,7 +183,9 @@ pub(crate) async fn install_model(
         jobs.insert(job_id.clone(), job.clone());
     }
     super::persist_download_job(&state.storage, &job).await;
+    let worker_job_id = job_id.clone();
     tokio::spawn(async move {
+        let job_id = worker_job_id;
         let result = download_direction(&state, &job_id, repo, &request.direction, &target).await;
         let (status, error) = match result {
             Ok(()) => ("downloaded", None),
