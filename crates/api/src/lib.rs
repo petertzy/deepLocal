@@ -1,4 +1,5 @@
 mod translation_routing;
+mod translation_api;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -158,6 +159,7 @@ fn router_with_storage(
         .route("/runtime/models/reveal", post(reveal_model_path))
         .route("/v1/models", get(openai_models))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/translate", post(translation_api::translate))
         .with_state(Arc::new(ApiState {
             runtime,
             downloads: Arc::new(RwLock::new(restored_downloads)),
