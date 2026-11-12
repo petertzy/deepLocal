@@ -262,6 +262,28 @@ async fn download_direction(
     result
 }
 
+// A local fixture source is available only in debug builds for integration tests.
+// Release builds always download from the fixed public Hugging Face host.
+fn hub_base_url() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("DEEPLOCAL_OPUS_MT_TEST_HUB_URL") {
+        if let Ok(url) = reqwest::Url::parse(&value) {
+            if url.scheme() == "http"
+                && url.host_str() == Some("127.0.0.1")
+                && url.port().is_some()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.username().is_empty()
+                && url.password().is_none()
+            {
+                return value.trim_end_matches('/').to_owned();
+            }
+        }
+    }
+    "https://huggingface.co".to_owned()
+}
+
 async fn download_into_stage(
     state: &Arc<ApiState>,
     job_id: &str,
@@ -270,12 +292,13 @@ async fn download_into_stage(
     staging: &Path,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
-    let revision: HubRevision = client.get(format!("https://huggingface.co/api/models/{repo}"))
+    let hub = hub_base_url();
+    let revision: HubRevision = client.get(format!("{hub}/api/models/{repo}"))
         .send().await?.error_for_status()?.json().await?;
     if revision.sha.len() != 40 || !revision.sha.bytes().all(|c| c.is_ascii_hexdigit()) {
         anyhow::bail!("Invalid model repository revision");
     }
-    let entries: Vec<HubFile> = client.get(format!("https://huggingface.co/api/models/{repo}/tree/{}", revision.sha))
+    let entries: Vec<HubFile> = client.get(format!("{hub}/api/models/{repo}/tree/{}", revision.sha))
         .send().await?.error_for_status()?.json().await?;
     let mut expected = Vec::new();
     for name in REQUIRED_FILES {
@@ -299,7 +322,7 @@ async fn download_into_stage(
         if super::download_cancel_requested(&state.downloads, job_id).await {
             anyhow::bail!("cancelled");
         }
-        let url = format!("https://huggingface.co/{repo}/resolve/{}/{}",
+        let url = format!("{hub}/{repo}/resolve/{}/{}",
             revision.sha, filename);
         let response = client.get(url).send().await?.error_for_status()?;
         let mut stream = response.bytes_stream();
