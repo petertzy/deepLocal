@@ -38,6 +38,8 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
   const [catalog, setCatalog] = useState<TranslationCatalog | null>(null);
   const [notice, setNotice] = useState("");
   const [runtimeNotice, setRuntimeNotice] = useState("");
+  const [runtimeSource, setRuntimeSource] = useState<string | null>(null);
+  const [runtimeReady, setRuntimeReady] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -110,10 +112,14 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
     try {
       const response = await fetch(`${apiBase}/runtime/translation/runtime/check`);
       if (!response.ok) throw new Error("Runtime check failed.");
-      const result = await response.json() as { ready: boolean; message: string };
+      const result = await response.json() as { ready: boolean; message: string; source?: string };
       setRuntimeNotice(result.message);
+      setRuntimeSource(result.source || null);
+      setRuntimeReady(result.ready);
     } catch {
       setRuntimeNotice("Cannot reach the translation runtime.");
+      setRuntimeReady(null);
+      setRuntimeSource(null);
     } finally {
       setBusy(null);
     }
@@ -127,12 +133,13 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
       </div>
       <p>Install only the directions you need. Converted models are stored in the deepLocal models folder, not inside the app or browser extension.</p>
       <div className="translationRuntime">
-        <span>Runtime: external Python / CTranslate2 / SentencePiece</span>
+        <span>Runtime: {runtimeSource === "managed" ? "app-managed" : runtimeSource === "environment" ? "custom Python" : "system Python"} / CTranslate2 / SentencePiece</span>
         <button type="button" className="secondaryAction" onClick={() => void checkRuntime()} disabled={busy === "runtime"}>
           <RefreshCw size={15} /> Check runtime
         </button>
       </div>
       {runtimeNotice && <p role="status">{runtimeNotice}</p>}
+      {runtimeReady === false && <p>The optional one-click runtime installer is not available yet. Existing Python environments remain supported; model downloads and the runtime are managed separately.</p>}
       {!catalog && <p>Reading available translation models...</p>}
       {catalog?.models.map((model) => {
         const jobs = downloads.filter(job => job.repo === model.repository &&
@@ -185,7 +192,7 @@ export function TranslationModels({ apiBase, downloads, onRefresh }: Props) {
           </div>
         );
       })}
-      <p className="translationFootnote">Model files are downloaded from Hugging Face and checked before installation. The application currently requires a separately configured Python runtime; no model weights are bundled.</p>
+      <p className="translationFootnote">Model files are downloaded from Hugging Face and checked before installation. deepLocal automatically detects an app-managed runtime when present and supports a custom Python override. Runtime distribution is not yet available; no model weights are bundled.</p>
       {notice && <p role="status">{notice}</p>}
     </section>
   );
