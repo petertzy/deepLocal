@@ -64,9 +64,21 @@ interpreter without installing packages into it. To use an alternate virtual
 environment directory, set `DEEPLOCAL_OPUS_MT_VENV`. Custom directories
 are never removed by `--remove-runtime`.
 
-### Runtime controls in the Models page
+### Navigation and model management
 
-The **Models** page provides **Install runtime**, **Repair runtime**, and
+The left sidebar has a dedicated **Translation** page. It contains OPUS-MT
+runtime status and Install / Repair / Remove controls, plus the existing
+English-to-Chinese and Chinese-to-English model download, verification,
+deletion, and progress UI. These translation-specific controls are no longer
+embedded in the **Models** page.
+
+The original **Models** page retains GGUF search, local discovery, model
+loading, and its other existing workflows. This separation does not change
+the OPUS-MT API endpoint or the browser extension integration.
+
+### Runtime controls in the Translation page
+
+The **Translation** page in the left sidebar provides **Install runtime**, **Repair runtime**, and
 **Remove runtime** for the repository-local `.tools/opus-runtime` Python
 environment. These controls are intended only for the personal source-checkout
 workflow, not packaged application distribution.
@@ -84,7 +96,7 @@ The operations run on the local Rust backend and may take several minutes.
 The page displays a completion or error message. For a complete clean-start
 test, run `bash scripts/start-opus.sh --stop`, then
 `bash scripts/start-opus.sh --remove-runtime`, and start the regular
-development server with `bash scripts/start-dev.sh`. From the Models page,
+development server with `bash scripts/start-dev.sh`. From the Translation page,
 click **Install runtime**. The normal
 `bash scripts/start-opus.sh` command still installs the runtime automatically
 before starting, so it will usually show **Repair runtime** and
