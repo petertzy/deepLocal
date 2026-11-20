@@ -4362,28 +4362,46 @@ async function streamChatCompletion(
 }
 
 async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string, signal: AbortSignal) {
-  const res = await fetch(`${API_BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    signal,
-    body: JSON.stringify({
-      model,
-      stream: false,
-      temperature: 0.9,
-      top_p: 0.95,
-      max_tokens: 64,
-      stop: ["\n"],
-      use_documents: false,
-      messages: buildPromptSuggestionMessages(messages, currentDraft, language),
-    }),
-  });
-  if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
+  const requestMessages = buildPromptSuggestionMessages(messages, currentDraft, language);
 
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "";
-  const prompt = cleanSuggestedPrompt(String(content));
-  if (!prompt) throw new Error("AI did not return a suggested question. Try again.");
-  return prompt;
+  // Reasoning models can exhaust a small token budget before producing visible text.
+  for (const maxTokens of [256, 768]) {
+    const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        stream: false,
+        temperature: 0.7,
+        top_p: 0.95,
+        max_tokens: maxTokens,
+        use_documents: false,
+        messages: requestMessages,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
+
+    const data = await res.json();
+    if (data.error) {
+      throw new Error(typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error));
+    }
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content ?? choice?.text ?? "";
+    const visibleText = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.filter((part: { type?: string; text?: string }) => part.type === "text" && typeof part.text === "string").map((part: { text: string }) => part.text).join("")
+        : "";
+    const prompt = cleanSuggestedPrompt(visibleText);
+    if (prompt) return prompt;
+    if (signal.aborted) throw new DOMException("Suggestion cancelled", "AbortError");
+    if (choice?.finish_reason !== "length") {
+      throw new Error("The model returned no visible suggestion. Check the model output or try another model.");
+    }
+  }
+
+  throw new Error("The model exhausted its generation budget without returning a suggested question.");
 }
 
 function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string, language: string): OpenAiRequestMessage[] {
