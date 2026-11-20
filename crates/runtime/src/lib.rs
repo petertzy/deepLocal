@@ -340,6 +340,18 @@ mod tests {
     }
 
     #[test]
+    fn length_finish_without_visible_tokens_reports_generation_budget_not_context() {
+        let mut index = 0;
+        let error = parse_llama_sse_event(
+            "data: {\\"choices\\":[{\\"delta\\":{},\\"finish_reason\\":\\"length\\"}]}\n\n",
+            &mut index,
+        )
+        .expect_err("length finish without visible content");
+        assert!(error.to_string().contains("Generation token limit"));
+        assert!(!error.to_string().contains("Context length exceeded"));
+    }
+
+    #[test]
     fn parses_llama_sse_done_event() {
         let mut index = 3;
         let token = parse_llama_sse_event("data: [DONE]\n\n", &mut index)
