@@ -21,7 +21,7 @@ Desktop installers are currently published in separate releases by platform:
 | Windows x64 | v0.1.17 | [Windows installer (.exe)](https://github.com/petertzy/deepLocal/releases/download/v0.1.17/deepLocal_0.1.17_x64-setup.exe) |
 | Linux x64 (Debian/Ubuntu) |v0.1.16 | [DEB package (.deb)](https://github.com/petertzy/deepLocal/releases/download/v0.1.16/deepLocal_0.1.16_amd64.deb) |
 | Linux x64 (portable) |v0.1.16 | [AppImage](https://github.com/petertzy/deepLocal/releases/download/v0.1.16/deepLocal_0.1.16_amd64.AppImage) |
-| macOS |v0.1.17 | [macOS release](https://github.com/petertzy/deepLocal/releases/download/v0.1.17/deepLocal_0.1.17_macos.dmg) |
+| macOS |v0.1.18 | [macOS release](https://github.com/petertzy/deepLocal/releases/download/v0.1.18/deepLocal-macos.dmg) |
 
 ## Features
 
