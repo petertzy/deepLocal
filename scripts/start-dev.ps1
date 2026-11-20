@@ -31,9 +31,19 @@ function Ensure-FrontendDependencies {
         '@tauri-apps/api',
         '@tauri-apps/plugin-dialog',
         '@tauri-apps/plugin-opener',
-        '@tauri-apps/plugin-updater'
+        '@tauri-apps/plugin-updater',
+        'typescript',
+        'vite'
     )
     $needsInstall = -not (Test-Path (Join-Path $desktopDir 'node_modules'))
+    if (-not $needsInstall) {
+        foreach ($command in @('tsc.cmd', 'vite.cmd')) {
+            if (-not (Test-Path (Join-Path $desktopDir "node_modules\.bin\$command"))) {
+                $needsInstall = $true
+                break
+            }
+        }
+    }
     if (-not $needsInstall) {
         Push-Location $desktopDir
         try {
@@ -55,9 +65,14 @@ function Ensure-FrontendDependencies {
     Write-Host 'Frontend dependencies are missing or incomplete. Restoring from package-lock.json...'
     Push-Location $desktopDir
     try {
-        & npm.cmd ci
+        & npm.cmd ci --include=dev
         if ($LASTEXITCODE -ne 0) {
             throw 'Frontend dependency installation failed. Check npm output and retry.'
+        }
+        foreach ($command in @('tsc.cmd', 'vite.cmd')) {
+            if (-not (Test-Path (Join-Path $desktopDir "node_modules\.bin\$command"))) {
+                throw "Frontend build tool $command is missing after npm ci."
+            }
         }
         & node.exe --input-type=module -e "import('@tauri-apps/api/core').then(() => import('@tauri-apps/api/event')).then(() => import('@tauri-apps/plugin-dialog')).then(() => import('@tauri-apps/plugin-opener')).then(() => import('@tauri-apps/plugin-updater')).catch(() => process.exit(1))"
         if ($LASTEXITCODE -ne 0) {
