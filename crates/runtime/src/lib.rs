@@ -308,6 +308,38 @@ mod tests {
     use super::{llama_startup_error_message, parse_llama_sse_event};
 
     #[test]
+    fn llama_payload_omits_unspecified_max_tokens() {
+        let request = deeplocal_core::GenerationRequest {
+            model: "test-model".to_string(),
+            messages: Vec::new(),
+            parameters: deeplocal_core::GenerationParameters {
+                max_tokens: None,
+                ..Default::default()
+            },
+            stream: false,
+        };
+        let payload = super::llama_chat_payload(&request, Vec::new());
+        assert!(payload.get("max_tokens").is_none());
+        assert_eq!(payload["stream"], true);
+        assert_eq!(payload["cache_prompt"], false);
+    }
+
+    #[test]
+    fn llama_payload_preserves_explicit_max_tokens() {
+        let request = deeplocal_core::GenerationRequest {
+            model: "test-model".to_string(),
+            messages: Vec::new(),
+            parameters: deeplocal_core::GenerationParameters {
+                max_tokens: Some(512),
+                ..Default::default()
+            },
+            stream: false,
+        };
+        let payload = super::llama_chat_payload(&request, Vec::new());
+        assert_eq!(payload["max_tokens"], 512);
+    }
+
+    #[test]
     fn startup_errors_suggest_smaller_context_for_context_failures() {
         let message = llama_startup_error_message("not ready", Some(b"invalid n_ctx value"));
         assert!(message.contains("smaller context"));
@@ -423,6 +455,31 @@ impl Drop for LlamaCppBackend {
             let _ = process.child.start_kill();
         }
     }
+}
+
+fn llama_chat_payload(
+    request: &GenerationRequest,
+    messages: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": request.model,
+        "stream": true,
+        "messages": messages,
+        "temperature": request.parameters.temperature,
+        "top_p": request.parameters.top_p,
+        "stop": request.parameters.stop,
+        "repeat_penalty": request.parameters.repeat_penalty,
+        "repeat_last_n": request.parameters.repeat_last_n,
+        "min_p": request.parameters.min_p,
+        // Disable prompt caching so each request starts from a clean KV-cache
+        // state. Without this, llama-server accumulates context across requests
+        // which can cause stale state and silent hangs after many turns.
+        "cache_prompt": false
+    });
+    if let Some(max_tokens) = request.parameters.max_tokens {
+        payload["max_tokens"] = serde_json::json!(max_tokens);
+    }
+    payload
 }
 
 fn take_sse_event(buffer: &mut String) -> Option<String> {
@@ -682,26 +739,12 @@ impl InferenceBackend for LlamaCppBackend {
                 })
             })
             .collect();
+        let payload = llama_chat_payload(&request, messages);
         let response = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()?
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
-            .json(&serde_json::json!({
-                "model": request.model,
-                "stream": true,
-                "messages": messages,
-                "temperature": request.parameters.temperature,
-                "top_p": request.parameters.top_p,
-                "max_tokens": request.parameters.max_tokens,
-                "stop": request.parameters.stop,
-                "repeat_penalty": request.parameters.repeat_penalty,
-                "repeat_last_n": request.parameters.repeat_last_n,
-                "min_p": request.parameters.min_p,
-                // Disable prompt caching so each request starts from a clean KV-cache
-                // state. Without this, llama-server accumulates context across requests
-                // which can cause stale state and silent hangs after many turns.
-                "cache_prompt": false
-            }))
+            .json(&payload)
             .send()
             .await?
             .error_for_status()?;
