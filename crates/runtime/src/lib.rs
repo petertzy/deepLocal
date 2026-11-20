@@ -29,6 +29,21 @@ pub struct RuntimeManager {
     loaded: Arc<RwLock<HashMap<String, ModelHandle>>>,
 }
 
+fn is_appledouble_model(model: &ModelDescriptor) -> bool {
+    fn is_sidecar(path: &str) -> bool {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("._"))
+    }
+
+    model.local_path.as_deref().is_some_and(is_sidecar)
+        || model
+            .files
+            .iter()
+            .any(|file| file.path.as_deref().is_some_and(is_sidecar))
+}
+
 impl RuntimeManager {
     pub async fn register_backend(&self, backend: Arc<dyn InferenceBackend>) {
         self.backends
@@ -38,11 +53,21 @@ impl RuntimeManager {
     }
 
     pub async fn register_model(&self, model: ModelDescriptor) {
+        if is_appledouble_model(&model) {
+            return;
+        }
         self.models.write().await.insert(model.id.clone(), model);
     }
 
     pub async fn list_models(&self) -> Vec<ModelDescriptor> {
-        let mut models: Vec<_> = self.models.read().await.values().cloned().collect();
+        let mut models: Vec<_> = self
+            .models
+            .read()
+            .await
+            .values()
+            .filter(|model| !is_appledouble_model(model))
+            .cloned()
+            .collect();
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models
     }
