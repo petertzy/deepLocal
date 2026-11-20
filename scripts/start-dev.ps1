@@ -39,7 +39,7 @@ function Ensure-FrontendDependencies {
         Push-Location $desktopDir
         try {
             foreach ($package in $requiredPackages) {
-                $packagePath = Join-Path 'node_modules' ($package -replace '/', '\')
+                $packagePath = Join-Path 'node_modules' ($package -replace '/', [IO.Path]::DirectorySeparatorChar)
                 if (-not (Test-Path $packagePath)) {
                     $needsInstall = $true
                     break
@@ -107,9 +107,9 @@ if ($Stop) {
 Initialize-Dependencies
 Require-Command npm.cmd
 if ($Build) {
+    Ensure-FrontendDependencies
     Push-Location $desktopDir
     try {
-        Ensure-FrontendDependencies
         & npm.cmd run build
         if ($LASTEXITCODE) { throw 'Frontend build failed.' }
     } finally { Pop-Location }
@@ -157,9 +157,9 @@ try {
         exit 0
     }
 
+    Ensure-FrontendDependencies
     Push-Location $desktopDir
     try {
-        Ensure-FrontendDependencies
         Write-Host "Starting UI. Open: http://127.0.0.1:$frontendPort/"
         & npm.cmd run dev -- --host 127.0.0.1 --port $frontendPort
         if ($LASTEXITCODE) { throw 'Frontend server failed.' }
