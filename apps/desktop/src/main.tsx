@@ -4363,9 +4363,21 @@ async function streamChatCompletion(
 
 async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string, signal: AbortSignal) {
   const requestMessages = buildPromptSuggestionMessages(messages, currentDraft, language);
+  const shortMessages: OpenAiRequestMessage[] = [
+    {
+      role: "user",
+      content: `Write one short, useful question in ${language.trim() || "English"} that someone could ask an AI assistant. Output only the question.`,
+    },
+  ];
+  const attempts = [
+    { maxTokens: 96, messages: requestMessages },
+    { maxTokens: 48, messages: shortMessages },
+    { maxTokens: 24, messages: shortMessages },
+  ];
+  let lastError = "AI did not return a suggested question.";
 
-  // Reasoning models can exhaust a small token budget before producing visible text.
-  for (const maxTokens of [256, 768]) {
+  for (const attempt of attempts) {
+    if (signal.aborted) throw new DOMException("Suggestion cancelled", "AbortError");
     const res = await fetch(`${API_BASE}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -4375,16 +4387,23 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
         stream: false,
         temperature: 0.7,
         top_p: 0.95,
-        max_tokens: maxTokens,
+        max_tokens: attempt.maxTokens,
         use_documents: false,
-        messages: requestMessages,
+        messages: attempt.messages,
       }),
     });
-    if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
+    if (!res.ok) {
+      const detail = await res.text();
+      lastError = detail || "AI suggestion failed.";
+      if (!isSuggestionContextError(lastError)) throw new Error(lastError);
+      continue;
+    }
 
     const data = await res.json();
     if (data.error) {
-      throw new Error(typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error));
+      lastError = typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error);
+      if (!isSuggestionContextError(lastError)) throw new Error(lastError);
+      continue;
     }
     const choice = data.choices?.[0];
     const content = choice?.message?.content ?? choice?.text ?? "";
@@ -4395,12 +4414,14 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
         : "";
     const prompt = cleanSuggestedPrompt(visibleText);
     if (prompt) return prompt;
-    if (signal.aborted) throw new DOMException("Suggestion cancelled", "AbortError");
-    // Some llama.cpp versions report an empty answer as "stop" even when
-    // reasoning consumed the visible-output budget. Retry once either way.
+    lastError = "The model returned no visible suggestion.";
   }
 
-  throw new Error("The model exhausted its generation budget without returning a suggested question.");
+  throw new Error(`Unable to generate a suggested question after reducing the context and token budget. ${lastError}`);
+}
+
+function isSuggestionContextError(message: string) {
+  return /context (length|window)|context_length|too many tokens|exceed.*token|token.*exceed/i.test(message);
 }
 
 function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string, language: string): OpenAiRequestMessage[] {
