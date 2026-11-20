@@ -4402,7 +4402,7 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
     const data = await res.json();
     if (data.error) {
       lastError = typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error);
-      if (!isSuggestionContextError(lastError)) throw new Error(lastError);
+      if (!isSuggestionRetryableError(lastError)) throw new Error(lastError);
       continue;
     }
     const choice = data.choices?.[0];
