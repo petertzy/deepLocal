@@ -343,7 +343,7 @@ mod tests {
     fn length_finish_without_visible_tokens_reports_generation_budget_not_context() {
         let mut index = 0;
         let error = parse_llama_sse_event(
-            concat!(r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#, "\\n\\n"),
+            concat!(r#"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#, "\n\n"),
             &mut index,
         )
         .expect_err("length finish without visible content");
