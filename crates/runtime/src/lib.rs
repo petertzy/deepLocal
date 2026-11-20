@@ -44,6 +44,33 @@ fn is_appledouble_model(model: &ModelDescriptor) -> bool {
             .any(|file| file.path.as_deref().is_some_and(is_sidecar))
 }
 
+#[cfg(test)]
+mod appledouble_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sidecar_descriptors_are_not_registered_or_listed() {
+        let runtime = RuntimeManager::default();
+        let sidecar = ModelDescriptor::local_gguf(
+            "gemma:._model.gguf".to_string(),
+            "models/gemma/._model.gguf".to_string(),
+        );
+        let real_model = ModelDescriptor::local_gguf(
+            "gemma:model.gguf".to_string(),
+            "models/gemma/model.gguf".to_string(),
+        );
+
+        assert!(is_appledouble_model(&sidecar));
+        assert!(!is_appledouble_model(&real_model));
+        runtime.register_model(sidecar).await;
+        runtime.register_model(real_model.clone()).await;
+
+        let models = runtime.list_models().await;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, real_model.id);
+    }
+}
+
 impl RuntimeManager {
     pub async fn register_backend(&self, backend: Arc<dyn InferenceBackend>) {
         self.backends
