@@ -28,8 +28,7 @@ function Initialize-Dependencies {
 
 function Ensure-FrontendDependencies {
     $requiredPackages = @(
-        '@tauri-apps/api/core',
-        '@tauri-apps/api/event',
+        '@tauri-apps/api',
         '@tauri-apps/plugin-dialog',
         '@tauri-apps/plugin-opener',
         '@tauri-apps/plugin-updater'
