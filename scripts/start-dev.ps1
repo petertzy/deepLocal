@@ -159,6 +159,9 @@ try {
     Ensure-FrontendDependencies
     Push-Location $desktopDir
     try {
+        Write-Host 'Building frontend before starting the development server...'
+        & npm.cmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed. The development server was not started.' }
         Write-Host "Starting UI. Open: http://127.0.0.1:$frontendPort/"
         & npm.cmd run dev -- --host 127.0.0.1 --port $frontendPort
         if ($LASTEXITCODE) { throw 'Frontend server failed.' }
