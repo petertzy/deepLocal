@@ -2290,13 +2290,32 @@ async fn open_models_directory(State(state): State<Arc<ApiState>>) -> impl IntoR
             .into_response();
     }
 
+    // Explorer may return a nonzero exit code even after opening the folder.
+    // On Windows, successful process creation is sufficient for this action.
+    #[cfg(target_os = "windows")]
+    {
+        return match Command::new("explorer").arg(path).spawn() {
+            Ok(_) => Json(serde_json::json!({
+                "status": "opened",
+                "path": path.to_string_lossy()
+            }))
+            .into_response(),
+            Err(error) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response(),
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
     let result = if cfg!(target_os = "macos") {
-        Command::new("open").arg(&path).status()
-    } else if cfg!(target_os = "windows") {
-        Command::new("explorer").arg(&path).status()
+        Command::new("open").arg(path).status()
     } else {
-        Command::new("xdg-open").arg(&path).status()
+        Command::new("xdg-open").arg(path).status()
     };
+
+    #[cfg(not(target_os = "windows"))]
 
     match result {
         Ok(status) if status.success() => {
