@@ -26,6 +26,61 @@ function Initialize-Dependencies {
     }
 }
 
+function Ensure-FrontendDependencies {
+    $requiredPackages = @(
+        '@tauri-apps/api',
+        '@tauri-apps/plugin-dialog',
+        '@tauri-apps/plugin-opener',
+        '@tauri-apps/plugin-updater',
+        'typescript',
+        'vite'
+    )
+    $needsInstall = -not (Test-Path (Join-Path $desktopDir 'node_modules'))
+    if (-not $needsInstall) {
+        foreach ($command in @('tsc.cmd', 'vite.cmd')) {
+            if (-not (Test-Path (Join-Path $desktopDir "node_modules\.bin\$command"))) {
+                $needsInstall = $true
+                break
+            }
+        }
+    }
+    if (-not $needsInstall) {
+        Push-Location $desktopDir
+        try {
+            foreach ($package in $requiredPackages) {
+                $packagePath = Join-Path 'node_modules' ($package -replace '/', [IO.Path]::DirectorySeparatorChar)
+                if (-not (Test-Path $packagePath)) {
+                    $needsInstall = $true
+                    break
+                }
+            }
+            if (-not $needsInstall) {
+                & node.exe --input-type=module -e "import('@tauri-apps/api/core').then(() => import('@tauri-apps/api/event')).then(() => import('@tauri-apps/plugin-dialog')).then(() => import('@tauri-apps/plugin-opener')).then(() => import('@tauri-apps/plugin-updater')).catch(() => process.exit(1))"
+                $needsInstall = $LASTEXITCODE -ne 0
+            }
+        } finally { Pop-Location }
+    }
+    if (-not $needsInstall) { return }
+
+    Write-Host 'Frontend dependencies are missing or incomplete. Restoring from package-lock.json...'
+    Push-Location $desktopDir
+    try {
+        & npm.cmd ci --include=dev
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Frontend dependency installation failed. Check npm output and retry.'
+        }
+        foreach ($command in @('tsc.cmd', 'vite.cmd')) {
+            if (-not (Test-Path (Join-Path $desktopDir "node_modules\.bin\$command"))) {
+                throw "Frontend build tool $command is missing after npm ci."
+            }
+        }
+        & node.exe --input-type=module -e "import('@tauri-apps/api/core').then(() => import('@tauri-apps/api/event')).then(() => import('@tauri-apps/plugin-dialog')).then(() => import('@tauri-apps/plugin-opener')).then(() => import('@tauri-apps/plugin-updater')).catch(() => process.exit(1))"
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Tauri frontend dependencies are still unavailable after npm ci.'
+        }
+    } finally { Pop-Location }
+}
+
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Missing required command: $Name. Install it, reopen PowerShell, and try again."
@@ -66,12 +121,9 @@ if ($Stop) {
 Initialize-Dependencies
 Require-Command npm.cmd
 if ($Build) {
+    Ensure-FrontendDependencies
     Push-Location $desktopDir
     try {
-        if (-not (Test-Path node_modules)) {
-            & npm.cmd install
-            if ($LASTEXITCODE) { throw 'npm install failed.' }
-        }
         & npm.cmd run build
         if ($LASTEXITCODE) { throw 'Frontend build failed.' }
     } finally { Pop-Location }
@@ -119,12 +171,12 @@ try {
         exit 0
     }
 
+    Ensure-FrontendDependencies
     Push-Location $desktopDir
     try {
-        if (-not (Test-Path node_modules)) {
-            & npm.cmd install
-            if ($LASTEXITCODE) { throw 'npm install failed.' }
-        }
+        Write-Host 'Building frontend before starting the development server...'
+        & npm.cmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed. The development server was not started.' }
         Write-Host "Starting UI. Open: http://127.0.0.1:$frontendPort/"
         & npm.cmd run dev -- --host 127.0.0.1 --port $frontendPort
         if ($LASTEXITCODE) { throw 'Frontend server failed.' }

@@ -62,3 +62,29 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+  frontend-build-windows:
+    name: Frontend build (Windows)
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify Tauri imports
+        run: node --input-type=module -e "await Promise.all(['@tauri-apps/api/core', '@tauri-apps/api/event', '@tauri-apps/plugin-dialog', '@tauri-apps/plugin-opener', '@tauri-apps/plugin-updater'].map(name => import(name)))"
+
+      - name: Build frontend
+        run: npm run build
