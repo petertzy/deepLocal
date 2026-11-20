@@ -225,9 +225,13 @@ fn collect_gguf_files_inner(directory: &PathBuf, files: &mut Vec<PathBuf>) -> an
         if path.is_dir() {
             collect_gguf_files_inner(&path, files)?;
         } else if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| !name.starts_with("._"))
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
         {
             files.push(path);
         }
@@ -271,6 +275,34 @@ fn configure_llama_server(resources: &PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::{bind_api_listener, bundled_llama_server_name, API_HOST, API_PORT};
+
+    #[test]
+    fn model_scan_ignores_appledouble_sidecars_in_nested_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "deeplocal-gguf-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos()
+        ));
+        let nested = root.join("gemma");
+        std::fs::create_dir_all(&nested).expect("create model directory");
+        let model = nested.join("gemma.gguf");
+        let sidecar = nested.join("._gemma.gguf");
+        let upper = root.join("other.GGUF");
+        std::fs::write(&model, b"GGUF").expect("write model");
+        std::fs::write(&sidecar, b"metadata").expect("write sidecar");
+        std::fs::write(&upper, b"GGUF").expect("write uppercase extension");
+
+        let mut found = super::collect_gguf_files(&root).expect("scan model directory");
+        found.sort();
+        let mut expected = vec![model, upper];
+        expected.sort();
+        assert_eq!(found, expected);
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
 
     #[test]
     fn bundled_llama_server_uses_platform_executable_name() {
