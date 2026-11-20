@@ -4396,9 +4396,8 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
     const prompt = cleanSuggestedPrompt(visibleText);
     if (prompt) return prompt;
     if (signal.aborted) throw new DOMException("Suggestion cancelled", "AbortError");
-    if (choice?.finish_reason !== "length") {
-      throw new Error("The model returned no visible suggestion. Check the model output or try another model.");
-    }
+    // Some llama.cpp versions report an empty answer as "stop" even when
+    // reasoning consumed the visible-output budget. Retry once either way.
   }
 
   throw new Error("The model exhausted its generation budget without returning a suggested question.");
