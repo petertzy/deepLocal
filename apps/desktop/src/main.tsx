@@ -4370,9 +4370,9 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
     },
   ];
   const attempts = [
-    { maxTokens: 96, messages: requestMessages },
-    { maxTokens: 48, messages: shortMessages },
-    { maxTokens: 24, messages: shortMessages },
+    { maxTokens: 256, messages: requestMessages },
+    { maxTokens: 768, messages: shortMessages },
+    { maxTokens: 1536, messages: shortMessages },
   ];
   let lastError = "AI did not return a suggested question.";
 
@@ -4395,7 +4395,7 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
     if (!res.ok) {
       const detail = await res.text();
       lastError = detail || "AI suggestion failed.";
-      if (!isSuggestionContextError(lastError)) throw new Error(lastError);
+      if (!isSuggestionRetryableError(lastError)) throw new Error(lastError);
       continue;
     }
 
@@ -4417,11 +4417,11 @@ async function generatePromptSuggestion(model: string, messages: ChatMessage[], 
     lastError = "The model returned no visible suggestion.";
   }
 
-  throw new Error(`Unable to generate a suggested question after reducing the context and token budget. ${lastError}`);
+  throw new Error(`Unable to generate a suggested question after retrying with a shorter prompt and a larger generation budget. ${lastError}`);
 }
 
-function isSuggestionContextError(message: string) {
-  return /context (length|window)|context_length|too many tokens|exceed.*token|token.*exceed/i.test(message);
+function isSuggestionRetryableError(message: string) {
+  return /context (length|window)|context_length|too many tokens|exceed.*token|token.*exceed|generation token limit/i.test(message);
 }
 
 function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string, language: string): OpenAiRequestMessage[] {
