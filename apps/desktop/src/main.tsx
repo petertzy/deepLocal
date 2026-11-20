@@ -284,7 +284,7 @@ const CHAT_RESPONSE_MAX_TOKENS = 4096;
 // context. Gemma 1B degrades rapidly with longer English responses in context —
 // keeping only 1 prior turn gives a clean state while retaining basic continuity.
 const CHAT_MAX_HISTORY_TURNS = 1;
-const SUGGESTION_TIMEOUT_MS = 30_000;
+const SUGGESTION_TIMEOUT_MS = 90_000;
 const CHAT_TEMPERATURE = 0.35;
 const CHAT_TOP_P = 0.9;
 const CHAT_REPEAT_PENALTY = 1.1;
