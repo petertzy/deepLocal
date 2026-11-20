@@ -284,7 +284,7 @@ const CHAT_RESPONSE_MAX_TOKENS = 4096;
 // context. Gemma 1B degrades rapidly with longer English responses in context —
 // keeping only 1 prior turn gives a clean state while retaining basic continuity.
 const CHAT_MAX_HISTORY_TURNS = 1;
-const SUGGESTION_TIMEOUT_MS = 30_000;
+const SUGGESTION_TIMEOUT_MS = 90_000;
 const CHAT_TEMPERATURE = 0.35;
 const CHAT_TOP_P = 0.9;
 const CHAT_REPEAT_PENALTY = 1.1;
@@ -4362,28 +4362,66 @@ async function streamChatCompletion(
 }
 
 async function generatePromptSuggestion(model: string, messages: ChatMessage[], currentDraft: string, language: string, signal: AbortSignal) {
-  const res = await fetch(`${API_BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    signal,
-    body: JSON.stringify({
-      model,
-      stream: false,
-      temperature: 0.9,
-      top_p: 0.95,
-      max_tokens: 64,
-      stop: ["\n"],
-      use_documents: false,
-      messages: buildPromptSuggestionMessages(messages, currentDraft, language),
-    }),
-  });
-  if (!res.ok) throw new Error((await res.text()) || "AI suggestion failed.");
+  const requestMessages = buildPromptSuggestionMessages(messages, currentDraft, language);
+  const shortMessages: OpenAiRequestMessage[] = [
+    {
+      role: "user",
+      content: `Write one short, useful question in ${language.trim() || "English"} that someone could ask an AI assistant. Output only the question.`,
+    },
+  ];
+  const attempts = [
+    { maxTokens: 256, messages: requestMessages },
+    { maxTokens: 768, messages: shortMessages },
+    { maxTokens: 1536, messages: shortMessages },
+  ];
+  let lastError = "AI did not return a suggested question.";
 
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? "";
-  const prompt = cleanSuggestedPrompt(String(content));
-  if (!prompt) throw new Error("AI did not return a suggested question. Try again.");
-  return prompt;
+  for (const attempt of attempts) {
+    if (signal.aborted) throw new DOMException("Suggestion cancelled", "AbortError");
+    const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model,
+        stream: false,
+        temperature: 0.7,
+        top_p: 0.95,
+        max_tokens: attempt.maxTokens,
+        use_documents: false,
+        messages: attempt.messages,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      lastError = detail || "AI suggestion failed.";
+      if (!isSuggestionRetryableError(lastError)) throw new Error(lastError);
+      continue;
+    }
+
+    const data = await res.json();
+    if (data.error) {
+      lastError = typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error);
+      if (!isSuggestionRetryableError(lastError)) throw new Error(lastError);
+      continue;
+    }
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content ?? choice?.text ?? "";
+    const visibleText = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.filter((part: { type?: string; text?: string }) => part.type === "text" && typeof part.text === "string").map((part: { text: string }) => part.text).join("")
+        : "";
+    const prompt = cleanSuggestedPrompt(visibleText);
+    if (prompt) return prompt;
+    lastError = "The model returned no visible suggestion.";
+  }
+
+  throw new Error(`Unable to generate a suggested question after retrying with a shorter prompt and a larger generation budget. ${lastError}`);
+}
+
+function isSuggestionRetryableError(message: string) {
+  return /context (length|window)|context_length|too many tokens|exceed.*token|token.*exceed|generation token limit/i.test(message);
 }
 
 function buildPromptSuggestionMessages(messages: ChatMessage[], currentDraft: string, language: string): OpenAiRequestMessage[] {
