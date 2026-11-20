@@ -456,9 +456,12 @@ fn parse_llama_sse_event(event: &str, index: &mut usize) -> anyhow::Result<Optio
         if let Some(finish_reason) = choice["finish_reason"].as_str() {
             if finish_reason == "length" {
                 if *index == 0 {
-                    // No tokens generated at all — full context overflow, surface as error.
+                    // A length finish reason means the generation token budget was
+                    // exhausted. Reasoning models may emit reasoning_content
+                    // without any visible content tokens, so this is not proof
+                    // that the prompt exceeded the context window.
                     anyhow::bail!(
-                        "Context length exceeded. The model could not generate a response within the context window."
+                        "Generation token limit reached before the model returned visible text. Increase max_tokens or disable reasoning for this request."
                     );
                 } else {
                     // Some tokens generated but output was cut short — emit a truncation marker
