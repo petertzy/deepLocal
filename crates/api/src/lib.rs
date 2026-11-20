@@ -424,7 +424,13 @@ async fn rescan_models(State(state): State<Arc<ApiState>>) -> impl IntoResponse 
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() || !is_gguf_path(&path) {
+        if !path.is_file()
+            || !is_gguf_path(&path)
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("._"))
+        {
             continue;
         }
         let absolute_path = absolute_path(path);
